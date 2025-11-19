@@ -90,6 +90,8 @@ void parse_reader_params(const char *reader_params_str,
   params->delimiter = '\0';
   params->obj_id_is_num = false;
   params->obj_id_is_num_set = false;
+  params->root_field = 0;
+  params->leaf_field = 0;
 
   if (reader_params_str == NULL) return;
   char *params_str = strdup(reader_params_str);
@@ -177,6 +179,12 @@ void parse_reader_params(const char *reader_params_str,
           ERROR("unsupported delimiter: '%s'\n", value);
         }
       }
+    } else if (strcasecmp(key, "root-col") == 0) {
+      params->root_field = (int)strtol(value, &end, 0);
+      _check_parsed_result(end, params->root_field);
+    } else if (strcasecmp(key, "leaf-col") == 0) {
+      params->leaf_field = (int)strtol(value, &end, 0);
+      _check_parsed_result(end, params->leaf_field);
     } else {
       ERROR("cache does not support trace parameter %s\n", key);
       exit(1);
