@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-const char *miss_trace = "~/miss_ids/miss_trace.txt";
+const char *miss_trace = "/users/Marthen/miss_ids/miss_trace.txt";
 
 /** this file contains both base function, which should be called by all
  *eviction algorithms, and the queue related functions, which should be called
