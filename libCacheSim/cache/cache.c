@@ -4,6 +4,9 @@
 
 #include "libCacheSim/cache.h"
 
+#include <errno.h>
+#include <linux/limits.h>
+
 #include "../dataStructure/hashtable/hashtable.h"
 #include "libCacheSim/prefetchAlgo.h"
 
@@ -11,7 +14,32 @@
 extern "C" {
 #endif
 
-const char *miss_trace = "/users/Marthen/miss_ids/miss_trace.txt";
+static const char *miss_trace_default = "~/miss_ids/miss_trace.txt";
+
+static void resolve_miss_trace(char *out, size_t outlen) {
+  const char *env = getenv("MISS_TRACE_PATH");
+  if (env && env[0]) {
+    strncpy(out, env, outlen - 1);
+    out[outlen - 1] = '\0';
+    return;
+  }
+
+  const char *src = miss_trace_default;
+  if (src[0] == '~') {
+    const char *home = getenv("HOME");
+    if (home && home[0]) {
+      /* expand ~ to $HOME */
+      snprintf(out, outlen, "%s%s", home, src + 1);
+    } else {
+      /* fallback to filename in current dir */
+      strncpy(out, src + 2, outlen - 1);
+      out[outlen - 1] = '\0';
+    }
+  } else {
+    strncpy(out, src, outlen - 1);
+    out[outlen - 1] = '\0';
+  }
+}
 
 /** this file contains both base function, which should be called by all
  *eviction algorithms, and the queue related functions, which should be called
@@ -258,10 +286,16 @@ bool cache_get_base(cache_t *cache, const request_t *req) {
     cache->insert(cache, req);
 
     // trace the miss ids
-    FILE *miss_trace_fp = fopen(miss_trace, "a");
+    char miss_trace_resolved[PATH_MAX];
+    resolve_miss_trace(miss_trace_resolved, sizeof(miss_trace_resolved));
+
+    FILE *miss_trace_fp = fopen(miss_trace_resolved, "a");
     if (miss_trace_fp != NULL) {
       fprintf(miss_trace_fp, "%llu\n", (unsigned long long)req->obj_id);
       fclose(miss_trace_fp);
+    } else {
+      /* make the failure visible during debugging */
+      fprintf(stderr, "fopen(%s, \"a\") failed: %s\n", miss_trace_resolved, strerror(errno));
     }
   }
 
