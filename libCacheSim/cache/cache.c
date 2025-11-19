@@ -15,32 +15,7 @@
 extern "C" {
 #endif
 
-static const char *miss_trace_default = "~/miss_ids/miss_trace.txt";
-
-static void resolve_miss_trace(char *out, size_t outlen) {
-  const char *env = getenv("MISS_TRACE_PATH");
-  if (env && env[0]) {
-    strncpy(out, env, outlen - 1);
-    out[outlen - 1] = '\0';
-    return;
-  }
-
-  const char *src = miss_trace_default;
-  if (src[0] == '~') {
-    const char *home = getenv("HOME");
-    if (home && home[0]) {
-      /* expand ~ to $HOME */
-      snprintf(out, outlen, "%s%s", home, src + 1);
-    } else {
-      /* fallback to filename in current dir */
-      strncpy(out, src + 2, outlen - 1);
-      out[outlen - 1] = '\0';
-    }
-  } else {
-    strncpy(out, src, outlen - 1);
-    out[outlen - 1] = '\0';
-  }
-}
+static const char *miss_trace_resolved = "/users/Marthen/miss_ids/miss_trace.txt";
 
   /* Ensure parent directory of `path` exists, creating intermediate dirs as needed.
  * Returns true on success or if no parent dir is present, false on failure.
@@ -74,9 +49,6 @@ static void resolve_miss_trace(char *out, size_t outlen) {
    * Safe about missing directories and reports fopen errors to stderr.
    */
   static void trace_miss_id(const request_t *req) {
-  char miss_trace_resolved[PATH_MAX];
-  resolve_miss_trace(miss_trace_resolved, sizeof(miss_trace_resolved));
-
   /* try to create parent directories if needed */
   if (!ensure_parent_dir_exists(miss_trace_resolved)) {
     /* still attempt to open the file; log the cause */
