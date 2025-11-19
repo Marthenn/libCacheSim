@@ -29,6 +29,8 @@ typedef struct {
   int cnt_field_idx;
   int ttl_field_idx;
   int tenant_field_idx;
+  int root_field_idx;
+  int leaf_field_idx;
 
   int n_feature_fields;
   int feature_fields[N_MAX_FEATURES];

@@ -54,6 +54,9 @@ typedef struct {
   int32_t n_feature_fields;
   int32_t feature_fields[N_MAX_FEATURES];
 
+  int root_field;
+  int leaf_field;
+
   // block cache, 0 and -1 means ignore this field, 1 is also invalid
   // block_size breaks a large request for multiple blocks into multiple
   // requests

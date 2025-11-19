@@ -42,6 +42,9 @@ typedef struct request {
 
   int64_t next_access_vtime;
 
+  bool leaf;
+  bool root;
+
   // this is used by key-value cache traces
   struct {
     uint64_t key_size : 16;

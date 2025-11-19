@@ -257,6 +257,16 @@ static inline void csv_cb1(void *s, size_t len, void *data) {
     reader->n_req_left = (uint64_t)strtoull((char *)s, &end, 0) - 1;
   } else if (csv_params->curr_field_idx == csv_params->tenant_field_idx) {
     req->tenant_id = (int32_t)strtoul((char *)s, &end, 0);
+  } else if (csv_params->curr_field_idx == csv_params->root_field_idx) {
+    if (len == 1 && ((char *)s)[0] == '1') {
+      req->root = true;
+    } else {
+      req->root = false;
+    }
+  } else if (csv_params->curr_field_idx == csv_params->leaf_field_idx) {
+    if (len == 1 && ((char *)s)[0] == '1') {
+      req->leaf = true;
+    }
   } else {
     for (int i = 0; i < csv_params->n_feature_fields; i++) {
       if (csv_params->curr_field_idx == csv_params->feature_fields[i]) {
@@ -302,6 +312,8 @@ void csv_setup_reader(reader_t *const reader) {
   csv_params->ttl_field_idx = init_params->ttl_field;
   csv_params->cnt_field_idx = init_params->cnt_field;
   csv_params->tenant_field_idx = init_params->tenant_field;
+  csv_params->root_field_idx = init_params->root_field;
+  csv_params->leaf_field_idx = init_params->leaf_field;
   csv_params->n_feature_fields = init_params->n_feature_fields;
   for (int i = 0; i < csv_params->n_feature_fields; i++) {
     csv_params->feature_fields[i] = init_params->feature_fields[i];

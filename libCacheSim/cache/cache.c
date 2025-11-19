@@ -15,7 +15,7 @@
 extern "C" {
 #endif
 
-static const char *miss_trace_resolved = "/users/Marthen/miss_ids/miss_trace.txt";
+static const char *miss_trace_resolved = "miss_trace.txt";
 
   /* Ensure parent directory of `path` exists, creating intermediate dirs as needed.
  * Returns true on success or if no parent dir is present, false on failure.
@@ -49,28 +49,42 @@ static const char *miss_trace_resolved = "/users/Marthen/miss_ids/miss_trace.txt
    * Safe about missing directories and reports fopen errors to stderr.
    */
   static void trace_miss_id(const request_t *req) {
-  /* try to create parent directories if needed */
-  if (!ensure_parent_dir_exists(miss_trace_resolved)) {
-    /* still attempt to open the file; log the cause */
-    fprintf(stderr, "ensure_parent_dir_exists(%s) failed: %s\n",
-            miss_trace_resolved, strerror(errno));
-  }
-
-  FILE *miss_trace_fp = fopen(miss_trace_resolved, "a");
-  if (miss_trace_fp == NULL) {
-    /* if file does not exist due to ENOENT, try creating parent again and retry */
-    if (errno == ENOENT && ensure_parent_dir_exists(miss_trace_resolved)) {
-      miss_trace_fp = fopen(miss_trace_resolved, "a");
+    /* try to create parent directories if needed */
+    if (!ensure_parent_dir_exists(miss_trace_resolved)) {
+      /* still attempt to open the file; log the cause */
+      fprintf(stderr, "ensure_parent_dir_exists(%s) failed: %s\n",
+              miss_trace_resolved, strerror(errno));
     }
-  }
 
-  if (miss_trace_fp != NULL) {
-    fprintf(miss_trace_fp, "%llu\n", (unsigned long long)req->obj_id);
+    FILE *miss_trace_fp = fopen(miss_trace_resolved, "a");
+    if (miss_trace_fp == NULL) {
+      int saved_errno = errno;
+      /* if file does not exist due to ENOENT, try creating parent again and retry */
+      if (saved_errno == ENOENT && ensure_parent_dir_exists(miss_trace_resolved)) {
+        miss_trace_fp = fopen(miss_trace_resolved, "a");
+        if (miss_trace_fp == NULL) saved_errno = errno;
+      }
+      if (miss_trace_fp == NULL) {
+        fprintf(stderr, "fopen(%s, \"a\") failed: %s\n", miss_trace_resolved,
+                strerror(saved_errno));
+        return;
+      }
+    }
+
+    const char *node_type;
+    if (req->root && req->leaf) {
+      node_type = "conflicting";
+    } else if (req->root) {
+      node_type = "root";
+    } else if (req->leaf) {
+      node_type = "leaf";
+    } else {
+      node_type = "intermediary";
+    }
+
+    fprintf(miss_trace_fp, "%llu,%s\n", (unsigned long long)req->obj_id, node_type);
     fclose(miss_trace_fp);
-  } else {
-    fprintf(stderr, "fopen(%s, \"a\") failed: %s\n", miss_trace_resolved, strerror(errno));
   }
-}
 
 /** this file contains both base function, which should be called by all
  *eviction algorithms, and the queue related functions, which should be called
