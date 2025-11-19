@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <linux/limits.h>
+#include <sys/stat.h>
 
 #include "../dataStructure/hashtable/hashtable.h"
 #include "libCacheSim/prefetchAlgo.h"
@@ -38,6 +39,64 @@ static void resolve_miss_trace(char *out, size_t outlen) {
   } else {
     strncpy(out, src, outlen - 1);
     out[outlen - 1] = '\0';
+  }
+}
+
+  /* Ensure parent directory of `path` exists, creating intermediate dirs as needed.
+ * Returns true on success or if no parent dir is present, false on failure.
+ */
+  static bool ensure_parent_dir_exists(const char *path) {
+  char parent[PATH_MAX];
+  char *p;
+  if (!path || path[0] == '\0') return false;
+  strncpy(parent, path, sizeof(parent) - 1);
+  parent[sizeof(parent) - 1] = '\0';
+
+  p = strrchr(parent, '/');
+  if (!p) return true; /* no parent directory */
+
+  *p = '\0'; /* isolate parent path */
+
+  /* create each component in the parent path */
+  for (p = parent + 1; *p; p++) {
+    if (*p == '/') {
+      *p = '\0';
+      if (mkdir(parent, 0755) != 0 && errno != EEXIST) return false;
+      *p = '/';
+    }
+  }
+  /* create final parent */
+  if (mkdir(parent, 0755) != 0 && errno != EEXIST) return false;
+  return true;
+}
+
+  /* Resolve path (uses existing resolve_miss_trace) and append miss id to file.
+   * Safe about missing directories and reports fopen errors to stderr.
+   */
+  static void trace_miss_id(const request_t *req) {
+  char miss_trace_resolved[PATH_MAX];
+  resolve_miss_trace(miss_trace_resolved, sizeof(miss_trace_resolved));
+
+  /* try to create parent directories if needed */
+  if (!ensure_parent_dir_exists(miss_trace_resolved)) {
+    /* still attempt to open the file; log the cause */
+    fprintf(stderr, "ensure_parent_dir_exists(%s) failed: %s\n",
+            miss_trace_resolved, strerror(errno));
+  }
+
+  FILE *miss_trace_fp = fopen(miss_trace_resolved, "a");
+  if (miss_trace_fp == NULL) {
+    /* if file does not exist due to ENOENT, try creating parent again and retry */
+    if (errno == ENOENT && ensure_parent_dir_exists(miss_trace_resolved)) {
+      miss_trace_fp = fopen(miss_trace_resolved, "a");
+    }
+  }
+
+  if (miss_trace_fp != NULL) {
+    fprintf(miss_trace_fp, "%llu\n", (unsigned long long)req->obj_id);
+    fclose(miss_trace_fp);
+  } else {
+    fprintf(stderr, "fopen(%s, \"a\") failed: %s\n", miss_trace_resolved, strerror(errno));
   }
 }
 
@@ -286,17 +345,7 @@ bool cache_get_base(cache_t *cache, const request_t *req) {
     cache->insert(cache, req);
 
     // trace the miss ids
-    char miss_trace_resolved[PATH_MAX];
-    resolve_miss_trace(miss_trace_resolved, sizeof(miss_trace_resolved));
-
-    FILE *miss_trace_fp = fopen(miss_trace_resolved, "a");
-    if (miss_trace_fp != NULL) {
-      fprintf(miss_trace_fp, "%llu\n", (unsigned long long)req->obj_id);
-      fclose(miss_trace_fp);
-    } else {
-      /* make the failure visible during debugging */
-      fprintf(stderr, "fopen(%s, \"a\") failed: %s\n", miss_trace_resolved, strerror(errno));
-    }
+    trace_miss_id(req);
   }
 
   if (cache->prefetcher && cache->prefetcher->prefetch) {
