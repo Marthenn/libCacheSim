@@ -11,6 +11,8 @@
 extern "C" {
 #endif
 
+const char *miss_trace = "~/miss_ids/miss_trace.txt";
+
 /** this file contains both base function, which should be called by all
  *eviction algorithms, and the queue related functions, which should be called
  *by algorithm that uses only one queue and needs to update the queue such as
@@ -254,6 +256,13 @@ bool cache_get_base(cache_t *cache, const request_t *req) {
       cache->evict(cache, req);
     }
     cache->insert(cache, req);
+
+    // trace the miss ids
+    FILE *miss_trace_fp = fopen(miss_trace, "a");
+    if (miss_trace_fp != NULL) {
+      fprintf(miss_trace_fp, "%llu\n", (unsigned long long)req->obj_id);
+      fclose(miss_trace_fp);
+    }
   }
 
   if (cache->prefetcher && cache->prefetcher->prefetch) {
