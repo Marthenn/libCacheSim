@@ -60,3 +60,19 @@ set_target_properties(traceFilter
         )
 
 install(TARGETS traceFilter RUNTIME DESTINATION bin)
+
+set(traceLBNConv_sources_cpp
+        traceLBNConv.cpp
+        cli_parser.cpp
+)
+add_executable(traceLBNConv ${traceLBNConv_sources_cpp})
+target_include_directories(traceLBNConv PRIVATE ${libCacheSim_include_dir} ${GLib_INCLUDE_DIRS})
+target_link_libraries(traceLBNConv ${PROJECT_NAME} cliReaderLib)
+set_target_properties(traceLBNConv
+        PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+)
+
+install(TARGETS traceLBNConv RUNTIME DESTINATION bin)
