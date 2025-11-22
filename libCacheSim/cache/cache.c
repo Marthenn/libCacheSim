@@ -5,7 +5,7 @@
 #include "libCacheSim/cache.h"
 
 #include <errno.h>
-#include <linux/limits.h>
+// #include <linux/limits.h>
 #include <sys/stat.h>
 
 #include "../dataStructure/hashtable/hashtable.h"
@@ -15,76 +15,76 @@
 extern "C" {
 #endif
 
-static const char *miss_trace_resolved = "miss_trace.txt";
-
-  /* Ensure parent directory of `path` exists, creating intermediate dirs as needed.
- * Returns true on success or if no parent dir is present, false on failure.
- */
-  static bool ensure_parent_dir_exists(const char *path) {
-  char parent[PATH_MAX];
-  char *p;
-  if (!path || path[0] == '\0') return false;
-  strncpy(parent, path, sizeof(parent) - 1);
-  parent[sizeof(parent) - 1] = '\0';
-
-  p = strrchr(parent, '/');
-  if (!p) return true; /* no parent directory */
-
-  *p = '\0'; /* isolate parent path */
-
-  /* create each component in the parent path */
-  for (p = parent + 1; *p; p++) {
-    if (*p == '/') {
-      *p = '\0';
-      if (mkdir(parent, 0755) != 0 && errno != EEXIST) return false;
-      *p = '/';
-    }
-  }
-  /* create final parent */
-  if (mkdir(parent, 0755) != 0 && errno != EEXIST) return false;
-  return true;
-}
-
-  /* Resolve path (uses existing resolve_miss_trace) and append miss id to file.
-   * Safe about missing directories and reports fopen errors to stderr.
-   */
-  static void trace_miss_id(const request_t *req) {
-    /* try to create parent directories if needed */
-    if (!ensure_parent_dir_exists(miss_trace_resolved)) {
-      /* still attempt to open the file; log the cause */
-      fprintf(stderr, "ensure_parent_dir_exists(%s) failed: %s\n",
-              miss_trace_resolved, strerror(errno));
-    }
-
-    FILE *miss_trace_fp = fopen(miss_trace_resolved, "a");
-    if (miss_trace_fp == NULL) {
-      int saved_errno = errno;
-      /* if file does not exist due to ENOENT, try creating parent again and retry */
-      if (saved_errno == ENOENT && ensure_parent_dir_exists(miss_trace_resolved)) {
-        miss_trace_fp = fopen(miss_trace_resolved, "a");
-        if (miss_trace_fp == NULL) saved_errno = errno;
-      }
-      if (miss_trace_fp == NULL) {
-        fprintf(stderr, "fopen(%s, \"a\") failed: %s\n", miss_trace_resolved,
-                strerror(saved_errno));
-        return;
-      }
-    }
-
-    const char *node_type;
-    if (req->root && req->leaf) {
-      node_type = "conflicting";
-    } else if (req->root) {
-      node_type = "root";
-    } else if (req->leaf) {
-      node_type = "leaf";
-    } else {
-      node_type = "intermediary";
-    }
-
-    fprintf(miss_trace_fp, "%llu,%s\n", (unsigned long long)req->obj_id, node_type);
-    fclose(miss_trace_fp);
-  }
+// static const char *miss_trace_resolved = "miss_trace.txt";
+//
+//   /* Ensure parent directory of `path` exists, creating intermediate dirs as needed.
+//  * Returns true on success or if no parent dir is present, false on failure.
+//  */
+//   static bool ensure_parent_dir_exists(const char *path) {
+//   char parent[PATH_MAX];
+//   char *p;
+//   if (!path || path[0] == '\0') return false;
+//   strncpy(parent, path, sizeof(parent) - 1);
+//   parent[sizeof(parent) - 1] = '\0';
+//
+//   p = strrchr(parent, '/');
+//   if (!p) return true; /* no parent directory */
+//
+//   *p = '\0'; /* isolate parent path */
+//
+//   /* create each component in the parent path */
+//   for (p = parent + 1; *p; p++) {
+//     if (*p == '/') {
+//       *p = '\0';
+//       if (mkdir(parent, 0755) != 0 && errno != EEXIST) return false;
+//       *p = '/';
+//     }
+//   }
+//   /* create final parent */
+//   if (mkdir(parent, 0755) != 0 && errno != EEXIST) return false;
+//   return true;
+// }
+//
+//   /* Resolve path (uses existing resolve_miss_trace) and append miss id to file.
+//    * Safe about missing directories and reports fopen errors to stderr.
+//    */
+//   static void trace_miss_id(const request_t *req) {
+//     /* try to create parent directories if needed */
+//     if (!ensure_parent_dir_exists(miss_trace_resolved)) {
+//       /* still attempt to open the file; log the cause */
+//       fprintf(stderr, "ensure_parent_dir_exists(%s) failed: %s\n",
+//               miss_trace_resolved, strerror(errno));
+//     }
+//
+//     FILE *miss_trace_fp = fopen(miss_trace_resolved, "a");
+//     if (miss_trace_fp == NULL) {
+//       int saved_errno = errno;
+//       /* if file does not exist due to ENOENT, try creating parent again and retry */
+//       if (saved_errno == ENOENT && ensure_parent_dir_exists(miss_trace_resolved)) {
+//         miss_trace_fp = fopen(miss_trace_resolved, "a");
+//         if (miss_trace_fp == NULL) saved_errno = errno;
+//       }
+//       if (miss_trace_fp == NULL) {
+//         fprintf(stderr, "fopen(%s, \"a\") failed: %s\n", miss_trace_resolved,
+//                 strerror(saved_errno));
+//         return;
+//       }
+//     }
+//
+//     const char *node_type;
+//     if (req->root && req->leaf) {
+//       node_type = "conflicting";
+//     } else if (req->root) {
+//       node_type = "root";
+//     } else if (req->leaf) {
+//       node_type = "leaf";
+//     } else {
+//       node_type = "intermediary";
+//     }
+//
+//     fprintf(miss_trace_fp, "%llu,%s\n", (unsigned long long)req->obj_id, node_type);
+//     fclose(miss_trace_fp);
+//   }
 
 /** this file contains both base function, which should be called by all
  *eviction algorithms, and the queue related functions, which should be called
@@ -331,7 +331,7 @@ bool cache_get_base(cache_t *cache, const request_t *req) {
     cache->insert(cache, req);
 
     // trace the miss ids
-    trace_miss_id(req);
+    // trace_miss_id(req);
   }
 
   if (cache->prefetcher && cache->prefetcher->prefetch) {

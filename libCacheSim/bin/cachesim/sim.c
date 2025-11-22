@@ -8,6 +8,9 @@
 extern "C" {
 #endif
 
+char csv_path[] = "/mnt/mfs/cphy_meta.csv";
+char csv_line[1024];
+
 void print_head_requests(request_t *req, uint64_t req_cnt) {
   if (req_cnt < 2) {
     print_request(req);
@@ -80,6 +83,19 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
   char size_str[64];
 
   if (!ignore_obj_size) convert_size_to_str(cache->cache_size, size_str, 64);
+
+  // CSV: trace,cache_name,size,miss_ratio
+  double miss_ratio = req_cnt ? (double)miss_cnt / (double)req_cnt : 0.0;
+  snprintf(csv_line, sizeof(csv_line), "%s,%s,%s,%.4lf\n",
+         mybasename(reader->trace_path), detailed_cache_name, size_str, miss_ratio);
+  FILE *output_file = fopen(csv_path, "a");
+  if (output_file == NULL) {
+    ERROR("cannot open file %s %s\n", csv_path, strerror(errno));
+    exit(1);
+  }
+  fprintf(output_file, "%s", csv_line);
+  fclose(output_file);
+
 #pragma GCC diagnostic push
   // Removed unknown pragma warning
   if (!ignore_obj_size) {
@@ -108,13 +124,13 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
     snprintf(dir_path, dir_length + 1, "%s", ofilepath);
     create_dir(dir_path);
   }
-  FILE *output_file = fopen(ofilepath, "a");
-  if (output_file == NULL) {
+  FILE *csv_file = fopen(ofilepath, "a");
+  if (csv_file == NULL) {
     ERROR("cannot open file %s %s\n", ofilepath, strerror(errno));
     exit(1);
   }
-  fprintf(output_file, "%s", output_str);
-  fclose(output_file);
+  fprintf(csv_file, "%s", output_str);
+  fclose(csv_file);
 
 #if defined(TRACK_EVICTION_V_AGE)
   while (cache->get_occupied_byte(cache) > 0) {
