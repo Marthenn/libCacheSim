@@ -32,9 +32,9 @@ struct output_format {
 } __attribute__((packed));
 
 int main(int argc, char *argv[]) {
-  if (argc < 4 || argc > 6) {
-    fprintf(stderr, "Usage: %s <trace_path> <trace_type> <fanout> [output_dir] [filename_template]\n", argv[0]);
-    fprintf(stderr, "Example: %s /path/trace.oracleGeneral.zst oracleGeneral 78.17 ./out \"%%s_meta_%%s.oracleGeneral\"\n", argv[0]);
+  if (argc < 4 || argc > 7) {
+    fprintf(stderr, "Usage: %s <trace_path> <trace_type> <fanout> [output_dir] [filename_template] [output_format]\n", argv[0]);
+    fprintf(stderr, "Example: %s /path/trace.oracleGeneral.zst oracleGeneral 78.17 ./out \"%%s_meta_%%s.oracleGeneral\" oracleGeneral\n", argv[0]);
     return 1;
   }
 
@@ -50,10 +50,13 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  // Optional output directory and filename template
+  // Optional output directory, filename template, and output format
+  // Usage now: [output_dir] [filename_template] [output_format]
   char* output_dir = (argc >= 5) ? argv[4] : (char*)".";
   const char* default_template = "%s_meta_%s.oracleGeneral";
-  char* filename_template = (argc == 6) ? argv[5] : (char*)default_template;
+  char* filename_template = (argc >= 6) ? argv[5] : (char*)default_template;
+  char* output_format = (argc >= 7) ? argv[6] : (char*)"oracleGeneral";
+  bool is_csv = (strcmp(output_format, "csv") == 0);
 
   // Derive output prefix from trace filename (same logic as before)
   char output_prefix[OFILEPATH_LEN];
@@ -78,6 +81,17 @@ int main(int argc, char *argv[]) {
   char base_filename[OFILEPATH_LEN];
   // Use fanout_str to preserve user's textual representation (e.g. "78.17")
   snprintf(base_filename, OFILEPATH_LEN, filename_template, output_prefix, fanout_str);
+
+  if (is_csv) {
+    // ensure base_filename ends with .csv
+    const char *dot = strrchr(base_filename, '.');
+    if (dot == NULL || strcmp(dot, ".csv") != 0) {
+      char tmp_fname[OFILEPATH_LEN];
+      snprintf(tmp_fname, OFILEPATH_LEN, "%s.csv", base_filename);
+      strncpy(base_filename, tmp_fname, OFILEPATH_LEN - 1);
+      base_filename[OFILEPATH_LEN - 1] = '\0';
+    }
+  }
 
   // Build full output path: join output_dir and base_filename
   char output_filename[OFILEPATH_LEN];
@@ -108,7 +122,43 @@ int main(int argc, char *argv[]) {
 
   request_t *req = new_request();
 
-  std::ofstream output_file(output_filename, std::ios::binary);
+  // std::ofstream output_file(output_filename, std::ios::binary);
+  // if (!output_file.is_open()) {
+  //   ERROR("Failed to open output file %s: %s\n", output_filename, strerror(errno));
+  //   cli::free_arg(&args);
+  //   free_request(req);
+  //   return 1;
+  // }
+  //
+  // struct output_format out_req;
+  // out_req.next_access_vtime = -2;
+  //
+  // long total = 0;
+  // // Read requests and convert
+  // read_one_req(args.reader, req);
+  // while (req->valid) {
+  //   total++;
+  //
+  //   uint64_t meta_id = (uint64_t)((double)req->obj_id / fanout);
+  //
+  //   out_req.clock_time = req->clock_time;
+  //   out_req.obj_id = meta_id;
+  //   out_req.obj_size = req->obj_size; // preserve size (optional)
+  //   output_file.write(reinterpret_cast<char *>(&out_req), sizeof(out_req));
+  //
+  //   read_one_req(args.reader, req);
+  // }
+  //
+  // INFO("Finished conversion. Total requests processed: %ld\n", total);
+  //
+  // if (output_file.is_open()) output_file.close();
+
+  std::ofstream output_file;
+  if (is_csv) {
+    output_file.open(output_filename); // text
+  } else {
+    output_file.open(output_filename, std::ios::binary);
+  }
   if (!output_file.is_open()) {
     ERROR("Failed to open output file %s: %s\n", output_filename, strerror(errno));
     cli::free_arg(&args);
@@ -117,7 +167,7 @@ int main(int argc, char *argv[]) {
   }
 
   struct output_format out_req;
-  out_req.next_access_vtime = -2;
+  out_req.next_access_vtime = -1;
 
   long total = 0;
   // Read requests and convert
@@ -130,14 +180,20 @@ int main(int argc, char *argv[]) {
     out_req.clock_time = req->clock_time;
     out_req.obj_id = meta_id;
     out_req.obj_size = req->obj_size; // preserve size (optional)
-    output_file.write(reinterpret_cast<char *>(&out_req), sizeof(out_req));
+
+    if (is_csv) {
+      // csv: clock_time,meta_id,obj_size,next_access_vtime
+      output_file << out_req.clock_time << "," << out_req.obj_id << "," << out_req.obj_size << "," << out_req.next_access_vtime << "\n";
+    } else {
+      // binary oracleGeneral (unchanged)
+      output_file.write(reinterpret_cast<char *>(&out_req), sizeof(out_req));
+    }
 
     read_one_req(args.reader, req);
   }
 
-  INFO("Finished conversion. Total requests processed: %ld\n", total);
-
   if (output_file.is_open()) output_file.close();
+
   free_request(req);
   cli::free_arg(&args);
   return 0;
