@@ -108,11 +108,6 @@ int main(int argc, char *argv[]) {
 
   request_t *req = new_request();
 
-  // Ensure output directory exists (create parents if needed)
-  if (!ensure_parent_dir_exists(output_filename)) {
-    INFO("ensure_parent_dir_exists(%s) returned false; will still try to open file and report errors\n", output_filename);
-  }
-
   std::ofstream output_file(output_filename, std::ios::binary);
   if (!output_file.is_open()) {
     ERROR("Failed to open output file %s: %s\n", output_filename, strerror(errno));
