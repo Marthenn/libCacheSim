@@ -1,12 +1,12 @@
-// C++
 /*
  * File: libCacheSim/bin/traceUtils/traceLBNConv.cpp
  *
  * Converts a data trace LBN to metadata block IDs by dividing by the
- * provided fanout. Writes output in oracleGeneral binary format:
+ * provided fanout (supports floating point). Writes output in oracleGeneral binary format:
  *   clock_time, obj_id (mapped), obj_size, next_access_vtime = -2
  *
- * Usage: traceLBNConv <trace_path> <trace_type> <fanout>
+ * Usage: traceLBNConv <trace_path> <trace_type> <fanout> [output_dir] [filename_template]
+ * Example: traceLBNConv /path/trace.oracleGeneral.zst oracleGeneral 78.17 ./out "%s_meta_%s.oracleGeneral"
  */
 
 #include <cstring>
@@ -32,21 +32,28 @@ struct output_format {
 } __attribute__((packed));
 
 int main(int argc, char *argv[]) {
-  if (argc != 4) {
-    fprintf(stderr, "Usage: %s <trace_path> <trace_type> <fanout>\n", argv[0]);
-    fprintf(stderr, "Example: %s /path/trace.oracleGeneral.zst oracleGeneral 100\n", argv[0]);
+  if (argc < 4 || argc > 6) {
+    fprintf(stderr, "Usage: %s <trace_path> <trace_type> <fanout> [output_dir] [filename_template]\n", argv[0]);
+    fprintf(stderr, "Example: %s /path/trace.oracleGeneral.zst oracleGeneral 78.17 ./out \"%%s_meta_%%s.oracleGeneral\"\n", argv[0]);
     return 1;
   }
 
   char* trace_path = argv[1];
   char* trace_type_str = argv[2];
+  char* fanout_str = argv[3];
+
   errno = 0;
   char *endptr = nullptr;
-  unsigned long long fanout = strtoull(argv[3], &endptr, 10);
-  if (errno != 0 || endptr == argv[3] || fanout == 0) {
-    fprintf(stderr, "Invalid fanout: %s\n", argv[3]);
+  double fanout = strtod(fanout_str, &endptr);
+  if (errno != 0 || endptr == fanout_str || fanout <= 0.0) {
+    fprintf(stderr, "Invalid fanout: %s\n", fanout_str);
     return 1;
   }
+
+  // Optional output directory and filename template
+  char* output_dir = (argc >= 5) ? argv[4] : (char*)".";
+  const char* default_template = "%s_meta_%s.oracleGeneral";
+  char* filename_template = (argc == 6) ? argv[5] : (char*)default_template;
 
   // Derive output prefix from trace filename (same logic as before)
   char output_prefix[OFILEPATH_LEN];
@@ -67,9 +74,19 @@ int main(int argc, char *argv[]) {
   strncpy(output_prefix, trace_filename_ptr, prefix_len);
   output_prefix[prefix_len] = '\0';
 
-  // Build output filename: <prefix>_meta.oracleGeneral
+  // Build base filename using the template: e.g. <prefix>_meta_<fanout>.oracleGeneral
+  char base_filename[OFILEPATH_LEN];
+  // Use fanout_str to preserve user's textual representation (e.g. "78.17")
+  snprintf(base_filename, OFILEPATH_LEN, filename_template, output_prefix, fanout_str);
+
+  // Build full output path: join output_dir and base_filename
   char output_filename[OFILEPATH_LEN];
-  snprintf(output_filename, OFILEPATH_LEN, "%s_meta.oracleGeneral", output_prefix);
+  size_t dir_len = strlen(output_dir);
+  if (dir_len > 0 && output_dir[dir_len - 1] == '/') {
+    snprintf(output_filename, OFILEPATH_LEN, "%s%s", output_dir, base_filename);
+  } else {
+    snprintf(output_filename, OFILEPATH_LEN, "%s/%s", output_dir, base_filename);
+  }
 
   // Prepare reader
   struct arguments args;
@@ -86,10 +103,16 @@ int main(int argc, char *argv[]) {
     return 1;
   }
 
-  INFO("Converting trace %s to metadata with fanout=%llu. Output: %s\n",
-       trace_path, (unsigned long long)fanout, output_filename);
+  INFO("Converting trace %s to metadata with fanout=%s. Output: %s\n",
+       trace_path, fanout_str, output_filename);
 
   request_t *req = new_request();
+
+  // Ensure output directory exists (create parents if needed)
+  if (!ensure_parent_dir_exists(output_filename)) {
+    INFO("ensure_parent_dir_exists(%s) returned false; will still try to open file and report errors\n", output_filename);
+  }
+
   std::ofstream output_file(output_filename, std::ios::binary);
   if (!output_file.is_open()) {
     ERROR("Failed to open output file %s: %s\n", output_filename, strerror(errno));
@@ -107,7 +130,7 @@ int main(int argc, char *argv[]) {
   while (req->valid) {
     total++;
 
-    uint64_t meta_id = (uint64_t)(req->obj_id / fanout);
+    uint64_t meta_id = (uint64_t)((double)req->obj_id / fanout);
 
     out_req.clock_time = req->clock_time;
     out_req.obj_id = meta_id;
