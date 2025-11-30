@@ -8,7 +8,10 @@
 
 #include <assert.h>
 #include <glib.h>
+#include <inttypes.h>
+#include <libgen.h>
 #include <math.h>
+#include <sys/stat.h>
 
 #include "dataStructure/hashtable/hashtable.h"
 #include "libCacheSim/evictionAlgo.h"
@@ -49,10 +52,108 @@ typedef struct LeCaR_params {
   int64_t n_hit_lru_history;
   int64_t n_hit_lfu_history;
   bool update_weight;
+
+  // Tracing
+  char *trace_vtime;
+  char *trace_weight;
+  char *trace_ghost;
+
 } LeCaR_params_t;
 
 static void free_freq_node(void *list_node) {
   my_free(sizeof(freq_node_t), list_node);
+}
+
+void print_trace(char *filepath, const char *content) {
+  FILE *fp = fopen(filepath, "a");
+  if (fp == NULL) {
+    return;
+  }
+  fprintf(fp, "%s\n", content);
+  fclose(fp);
+}
+
+/* return true if a filesystem entry exists at path */
+static bool file_exists(const char *path) {
+  struct stat st;
+  return (path != NULL && stat(path, &st) == 0);
+}
+
+/* mkdir -p for 'dir'. returns 0 on success, -1 on failure */
+static int mkdir_p(const char *dir) {
+  if (dir == NULL || *dir == '\0') return 0;
+  char tmp[PATH_MAX];
+  size_t len = strnlen(dir, PATH_MAX);
+  if (len == 0 || len >= PATH_MAX) return -1;
+  strncpy(tmp, dir, len);
+  tmp[len] = '\0';
+
+  /* remove trailing slashes */
+  while (len > 1 && tmp[len - 1] == '/') {
+    tmp[--len] = '\0';
+  }
+
+  for (char *p = tmp + 1; *p; ++p) {
+    if (*p == '/') {
+      *p = '\0';
+      if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
+      *p = '/';
+    }
+  }
+  if (mkdir(tmp, 0755) != 0 && errno != EEXIST) return -1;
+  return 0;
+}
+
+/* ensure file at 'path' exists; if missing create parent directories and file,
+ * then write 'header' (if non-NULL). Does nothing when 'path' is NULL. */
+static void ensure_file_with_header(const char *path, const char *header) {
+  if (path == NULL) return;
+  if (file_exists(path)) return;
+
+  /* get parent directory safely */
+  char *dup = strdup(path);
+  if (dup == NULL) return;
+  char *parent = dirname(dup); /* dirname may modify dup */
+
+  if (parent != NULL && strcmp(parent, ".") != 0 && parent[0] != '\0') {
+    /* mkdir -p parent */
+    if (mkdir_p(parent) != 0) {
+      free(dup);
+      return; /* cannot create parent dirs */
+    }
+  }
+  free(dup);
+
+  /* create the file and write header if provided */
+  FILE *fp = fopen(path, "w");
+  if (fp == NULL) return;
+  if (header != NULL && header[0] != '\0') {
+    fprintf(fp, "%s\n", header);
+  }
+  fclose(fp);
+}
+
+/* Convenience to check the three trace files inside LeCaR_params_t.
+ * Call e.g.:
+ *   LeCaR_ensure_trace_files(params, "vtime,header", "weight,header", "ghost,header");
+ */
+static void LeCaR_ensure_trace_files(LeCaR_params_t *params,
+                                     const char *vtime_header,
+                                     const char *weight_header,
+                                     const char *ghost_header) {
+  if (params == NULL) return;
+  ensure_file_with_header(params->trace_vtime, vtime_header);
+  ensure_file_with_header(params->trace_weight, weight_header);
+  ensure_file_with_header(params->trace_ghost, ghost_header);
+}
+
+static void fmt_vtime(int64_t v, char *out, size_t out_sz) {
+  if (out == NULL || out_sz == 0) return;
+  if (v == INT64_MAX) {
+    snprintf(out, out_sz, "INF");
+  } else {
+    snprintf(out, out_sz, "%" PRId64, v);
+  }
 }
 
 // ***********************************************************************
@@ -161,6 +262,10 @@ cache_t *LeCaR_init(const common_cache_params_t ccache_params,
              params->w_lru);
   }
 
+  ensure_file_with_header(params->trace_vtime, "req_n,lru_next_vtime,lfu_next_vtime");
+  ensure_file_with_header(params->trace_ghost, "req_n,hit_ghost");
+  ensure_file_with_header(params->trace_weight, "req_n,w_lru");
+
   return cache;
 }
 
@@ -196,8 +301,12 @@ static void LeCaR_free(cache_t *cache) {
  * @return true if cache hit, false if cache miss
  */
 bool LeCaR_get(cache_t *cache, const request_t *req) {
-  // LeCaR_params_t *params = (LeCaR_params_t *)(cache->eviction_params);
+  LeCaR_params_t *params = (LeCaR_params_t *)(cache->eviction_params);
   bool ck = cache_get_base(cache, req);
+
+  print_trace(params->trace_weight,
+              g_strdup_printf("%ld,%.6lf", (long)cache->n_req, params->w_lru));
+
   return ck;
 }
 
@@ -247,6 +356,9 @@ static cache_obj_t *LeCaR_find(cache_t *cache, const request_t *req,
                            cache_obj);
       params->lru_g_occupied_byte -= (cache_obj->obj_size + cache->obj_md_size);
       hashtable_delete(cache->hashtable, cache_obj);
+
+      print_trace(params->trace_ghost,
+                  g_strdup_printf("%ld,LRU", (long)cache->n_req));
     } else if (cache_obj->LeCaR.evict_expert == 2) {
       // evicted by expert LFU
       params->n_hit_lfu_history++;
@@ -257,6 +369,9 @@ static cache_obj_t *LeCaR_find(cache_t *cache, const request_t *req,
                            cache_obj);
       params->lfu_g_occupied_byte -= (cache_obj->obj_size + cache->obj_md_size);
       hashtable_delete(cache->hashtable, cache_obj);
+
+      print_trace(params->trace_ghost,
+                  g_strdup_printf("%ld,LFU", (long)cache->n_req));
     } else {
       assert(cache_obj->LeCaR.evict_expert == -1);
       hashtable_delete(cache->hashtable, cache_obj);
@@ -463,6 +578,13 @@ void LeCaR_evict(cache_t *cache, const request_t *req) {
 
   cache_obj_t *obj_to_evict = NULL;
 
+  /* prepare printable vtime fields */
+  char lru_buf[32], lfu_buf[32];
+  fmt_vtime(lru_candidate->misc.next_access_vtime, lru_buf, sizeof(lru_buf));
+  fmt_vtime(lfu_candidate->misc.next_access_vtime, lfu_buf, sizeof(lfu_buf));
+  print_trace(params->trace_vtime,
+              g_strdup_printf("%ld,%s,%s", (long)cache->n_req, lru_buf, lfu_buf));
+
   if (cache->to_evict_candidate_gen_vtime == cache->n_req) {
     // we have generated a candidate in to_evict
     obj_to_evict = cache->to_evict_candidate;
@@ -622,6 +744,12 @@ static void LeCaR_parse_params(cache_t *cache,
     } else if (strcasecmp(key, "print") == 0) {
       printf("current parameters: %s\n", LeCaR_current_params(cache, params));
       exit(0);
+    } else if (strcasecmp(key, "trace-vtime") == 0) {
+      params->trace_vtime = strdup(value);
+    } else if (strcasecmp(key, "trace-weight") == 0) {
+      params->trace_weight = strdup(value);
+    } else if (strcasecmp(key, "trace-ghost") == 0) {
+      params->trace_ghost = strdup(value);
     } else {
       ERROR("%s does not have parameter %s\n", cache->cache_name, key);
       exit(1);
