@@ -122,11 +122,12 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
   if (csv_file == NULL) {
     ERROR("cannot open file %s %s\n", csv_dir, strerror(errno));
   }
-  // Trace, Cache, Size,  Miss Ratio, Byte Miss Ratio, Throughput(QPS)
+  // Trace, Ignore Obj Size, Cache, Size,  Miss Ratio, Byte Miss Ratio, Throughput(QPS)
   if (!ignore_obj_size) {
     fprintf(csv_file,
-            "%s,%s,%lld,%.6lf,%.6lf,%.2lf\n",
+            "%s,%s,%s,%lld,%.6lf,%.6lf,%.2lf\n",
             mybasename(reader->trace_path),
+            "N",
             detailed_cache_name,
             (long long)cache->cache_size,
             (double)miss_cnt / (double)req_cnt,
@@ -134,8 +135,9 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
             (double)req_cnt / runtime);
   } else {
     fprintf(csv_file,
-            "%s,%s,%lld,%.6lf,%.6lf,%.2lf\n",
+            "%s,%s,%s,%lld,%.6lf,%.6lf,%.2lf\n",
             mybasename(reader->trace_path),
+            "Y",
             detailed_cache_name,
             (long long)cache->cache_size,
             (double)miss_cnt / (double)req_cnt,
