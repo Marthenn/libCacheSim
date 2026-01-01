@@ -49,6 +49,13 @@ typedef struct LeCaR_params {
   int64_t n_hit_lru_history;
   int64_t n_hit_lfu_history;
   bool update_weight;
+
+  int64_t batch_size;
+  int64_t current_batch_cnt;
+  double pending_lru_penalty;
+  double pending_lfu_penalty;
+
+  int64_t weight_change_cnt;
 } LeCaR_params_t;
 
 static void free_freq_node(void *list_node) {
@@ -83,6 +90,7 @@ static inline void insert_obj_info_freq_node(LeCaR_params_t *params,
 
 static void update_weight(cache_t *cache, int64_t t, double *w_update,
                           double *w_no_update);
+static void update_weight_batch(cache_t *cache, int64_t t, bool is_lru_mistake);
 
 // ***********************************************************************
 // ****                                                               ****
@@ -139,6 +147,11 @@ cache_t *LeCaR_init(const common_cache_params_t ccache_params,
   params->lfu_g_occupied_byte = 0;
   params->q_head = params->q_tail = NULL;
 
+  params->batch_size = 1000;
+  params->current_batch_cnt = 0;
+  params->pending_lru_penalty = 0.0;
+  params->pending_lfu_penalty = 0.0;
+
   if (cache_specific_params != NULL) {
     LeCaR_parse_params(cache, cache_specific_params);
   } else {
@@ -160,6 +173,15 @@ cache_t *LeCaR_init(const common_cache_params_t ccache_params,
     snprintf(cache->cache_name, CACHE_NAME_ARRAY_LEN, "LeCaR-%.4lflru",
              params->w_lru);
   }
+  printf("Batch Size: %ld\n", (long)params->batch_size);
+  if (params->batch_size > 1) {
+    char temp_name[128];
+    snprintf(temp_name, sizeof(temp_name), "%s-batch%ld", cache->cache_name, params->batch_size);
+    strncpy(cache->cache_name, temp_name, CACHE_NAME_ARRAY_LEN - 1);
+    cache->cache_name[CACHE_NAME_ARRAY_LEN - 1] = '\0';
+  }
+
+  params->weight_change_cnt = 0;
 
   return cache;
 }
@@ -241,7 +263,8 @@ static cache_obj_t *LeCaR_find(cache_t *cache, const request_t *req,
       // evicted by expert LRU
       params->n_hit_lru_history++;
       int64_t t = cache->n_req - cache_obj->LeCaR.eviction_vtime;
-      update_weight(cache, t, &params->w_lru, &params->w_lfu);
+      // update_weight(cache, t, &params->w_lru, &params->w_lfu);
+      update_weight_batch(cache, t, true);
 
       remove_obj_from_list(&params->ghost_lru_head, &params->ghost_lru_tail,
                            cache_obj);
@@ -251,7 +274,8 @@ static cache_obj_t *LeCaR_find(cache_t *cache, const request_t *req,
       // evicted by expert LFU
       params->n_hit_lfu_history++;
       int64_t t = cache->n_req - cache_obj->LeCaR.eviction_vtime;
-      update_weight(cache, t, &params->w_lfu, &params->w_lru);
+      // update_weight(cache, t, &params->w_lfu, &params->w_lru);
+      update_weight_batch(cache, t, false);
 
       remove_obj_from_list(&params->ghost_lfu_head, &params->ghost_lfu_tail,
                            cache_obj);
@@ -622,6 +646,11 @@ static void LeCaR_parse_params(cache_t *cache,
     } else if (strcasecmp(key, "print") == 0) {
       printf("current parameters: %s\n", LeCaR_current_params(cache, params));
       exit(0);
+    } else if (strcasecmp(key, "batch-size") == 0) {
+      params->batch_size = (int64_t)strtol(value, &end, 0);
+      if (strlen(end) > 2) {
+        ERROR("param parsing error, find string \"%s\" after number\n", end);
+      }
     } else {
       ERROR("%s does not have parameter %s\n", cache->cache_name, key);
       exit(1);
@@ -758,6 +787,74 @@ static void update_weight(cache_t *cache, int64_t t, double *w_update,
   *w_update = *w_update / s;
   *w_no_update = (*w_no_update + 1e-10) / s;
   DEBUG_ASSERT(fabs(*w_update + *w_no_update - 1.0) < 0.0001);
+}
+
+/**
+ * Modified update_weight to handle batch accumulation
+ * @param is_lru_mistake: true if LRU evicted the item (LRU 'mistake'), false if LFU evicted it.
+ */
+static void update_weight_batch(cache_t *cache, int64_t t, bool is_lru_mistake) {
+  LeCaR_params_t *params = (LeCaR_params_t *)(cache->eviction_params);
+  if (!params->update_weight) return;
+
+  // 1. Calculate the regret (penalty) for this specific instance
+  // t is the time since eviction (cache->n_req - eviction_vtime)
+  double regret = pow(params->dr, (double)t);
+
+  // 2. Accumulate the regret
+  if (is_lru_mistake) {
+    params->pending_lru_penalty += regret;
+  } else {
+    params->pending_lfu_penalty += regret;
+  }
+
+  // 3. Increment batch counter
+  params->current_batch_cnt++;
+
+  // 4. Check if batch is full
+  if (params->current_batch_cnt >= params->batch_size) {
+    double avg_lru_penalty = params->pending_lru_penalty / params->current_batch_cnt;
+    double avg_lfu_penalty = params->pending_lfu_penalty / params->current_batch_cnt;
+
+    // Apply decay using the AVERAGE penalty
+    // We assume the batch represents 'one logical step' of this average magnitude
+    double new_w_lru = params->w_lru * exp(-params->lr * avg_lru_penalty);
+    double new_w_lfu = params->w_lfu * exp(-params->lr * avg_lfu_penalty);
+
+    // Safety: If both underflowed to 0 (very rare with avg), reset to equal
+    if (new_w_lru < 1e-300 && new_w_lfu < 1e-300) {
+      new_w_lru = 0.5;
+      new_w_lfu = 0.5;
+    }
+
+    // Normalization
+    double sum = new_w_lru + new_w_lfu;
+
+    // Final Safety check for division by zero
+    if (sum > 0) {
+      params->w_lru = new_w_lru / sum;
+      params->w_lfu = new_w_lfu / sum;
+    }
+    // Else: leave weights as is (should not happen with reset above)
+
+    // Reset Batch State
+    params->pending_lru_penalty = 0;
+    params->pending_lfu_penalty = 0;
+    params->current_batch_cnt = 0;
+    params->weight_change_cnt++;
+
+    // if (fabs(params->w_lru + params->w_lfu - 1.0) >= 0.0001) {
+    //   printf("FAULTY WEIGHTS: w_lru=%.6f, w_lfu=%.6f, sum=%.6f\n",
+    //          params->w_lru, params->w_lfu, params->w_lru + params->w_lfu);
+    // }
+
+    // Log occasionally
+    // if (params->weight_change_cnt % 10 == 0) {
+    //   VERBOSE("Batch Update: w_lru=%.4f, w_lfu=%.4f\n", params->w_lru, params->w_lfu);
+    // }
+    // printf("Change #%-4ld: ", params->weight_change_cnt);
+    // printf("Batch update: w_lru=%.4f, w_lfu=%.4f\n", params->w_lru, params->w_lfu);
+  }
 }
 
 // ***********************************************************************
