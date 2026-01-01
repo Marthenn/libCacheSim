@@ -14,10 +14,10 @@ using namespace std;
 using namespace lrb;
 
 void LRBCache::train() {
-  if (has_trained_once) {
-    training_data->clear();
-    return;
-  }
+  // if (has_trained_once) {
+  //   training_data->clear();
+  //   return;
+  // }
 
   ++n_retrain;
   auto timeBegin = chrono::system_clock::now();
@@ -74,7 +74,7 @@ void LRBCache::train() {
 }
 
 void LRBCache::sample() {
-  if (has_trained_once) return;
+  // if (has_trained_once) return;
 
   // start sampling once cache filled up
   auto rand_idx = _distribution(_generator);

@@ -276,7 +276,7 @@ class LRBCache : public Cache {
   uint32_t max_hash_edc_idx;
   uint32_t memory_window = 67108864;
   uint32_t n_feature;
-  bool has_trained_once = false;
+  // bool has_trained_once = false;
 
   // key -> (0/1 list, idx)
   sparse_hash_map<uint64_t, KeyMapEntryT> key_map;
