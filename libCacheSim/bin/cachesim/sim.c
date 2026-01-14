@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-char csv_path[] = "/mnt/mfs/cphy_meta.csv";
+char csv_path[] = "cphy_meta.csv";
 char csv_line[1024];
 
 void print_head_requests(request_t *req, uint64_t req_cnt) {
