@@ -1,3 +1,6 @@
+#include <unistd.h>
+#include <sys/wait.h>
+
 #include "libCacheSim/cache.h"
 #include "libCacheSim/reader.h"
 #include "utils/include/mymath.h"
@@ -10,6 +13,64 @@ extern "C" {
 
 char* csv_dir = "/mnt/mfs/results.csv";
 
+double run_oracle_on_buffer(request_t *req_buffer, int count, cache_t *cache) {
+  double candidates[] = {
+    0.01, 0.05, 0.10, 0.15, 0.20,
+    0.25, 0.30, 0.35, 0.40, 0.45,
+    0.50, 0.55, 0.60, 0.65, 0.70,
+    0.75, 0.80, 0.85, 0.90, 0.95,
+    0.99
+  };
+  const int num_candidates = 21;
+
+  int pipes[num_candidates][2];
+
+  for (int i = 0; i < num_candidates; i++) {
+    if (pipe(pipes[i]) == -1) {
+      ERROR("Pipe creation failed: %s\n", strerror(errno));
+      exit(1);
+    }
+
+    if (fork() == 0) { // CHILD PROCESS
+      close(pipes[i][0]);
+      extern void S3FIFO_resize(cache_t *cache, double new_small_ratio);
+      S3FIFO_resize(cache, candidates[i]);
+
+      int hits = 0;
+      for (int k = 0; k < count; k++) {
+        if (cache->get(cache, &req_buffer[k])) {
+          hits++;
+        }
+      }
+
+      double miss_ratio = 1.0 - ((double)hits / count);
+      if (write(pipes[i][1], &miss_ratio, sizeof(double)) == -1) {
+        ERROR("Write to pipe failed: %s\n", strerror(errno));
+        exit(1);
+      }
+      exit(0);
+    }
+  }
+
+  double best_miss = 2.0;
+  double best_param = -1.0;
+
+  for (int i = 0; i < num_candidates; i++) {
+    close(pipes[i][1]);
+
+    double child_miss;
+    if (read(pipes[i][0], &child_miss, sizeof(double)) > 0) {
+      if (child_miss < best_miss) {
+        best_miss = child_miss;
+        best_param = candidates[i];
+      }
+    }
+    wait(NULL); // Wait for child process to finish
+  }
+
+  return (best_param == -1.0) ? 0.1 : best_param;
+}
+
 void print_head_requests(request_t *req, uint64_t req_cnt) {
   if (req_cnt < 2) {
     print_request(req);
@@ -18,7 +79,7 @@ void print_head_requests(request_t *req, uint64_t req_cnt) {
 
 void simulate(reader_t *reader, cache_t *cache, int report_interval,
               int warmup_sec, char *ofilepath, bool ignore_obj_size,
-              bool print_head_req) {
+              bool print_head_req, int epoch_size) {
   /* random seed */
   srand(time(NULL));
   set_rand_seed(rand());
@@ -36,44 +97,79 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
   generate_cache_name(cache, detailed_cache_name, 256);
 
   double start_time = -1;
+
+  // Initialize Buffer
+  request_t *req_buffers = my_malloc_n(request_t, epoch_size);
+  for (int i = 0 ; i < epoch_size; i++) {
+    memset(&req_buffers[i], 0, sizeof(request_t));
+  }
+
   while (req->valid) {
-    if (print_head_req) {
-      print_head_requests(req, req_cnt);
+    int reqs_read = 0;
+    for (int i = 0; i < epoch_size; i++) {
+      if (read_one_req(reader, &req_buffers[i]) != 0) {
+        req_buffers[i].valid = false;
+        break;
+      }
+      reqs_read++;
     }
 
-    req->clock_time -= start_ts;
-    if (req->clock_time <= warmup_sec) {
-      cache->get(cache, req);
-      read_one_req(reader, req);
-      continue;
-    } else {
-      if (start_time < 0) {
-        start_time = gettime();
+    if (reqs_read == 0) { //End of Trace
+      break;
+    }
+
+    double optimal_param = run_oracle_on_buffer(req_buffers, reqs_read, cache);
+    extern void S3FIFO_print_training_row(cache_t *cache, double optimal_param);
+    S3FIFO_print_training_row(cache, optimal_param);
+
+    extern void S3FIFO_resize(cache_t *cache, double new_small_ratio);
+    S3FIFO_resize(cache, optimal_param);
+
+    for (int i = 0; i < reqs_read; i++) {
+      request_t *req = &req_buffers[i];
+      req_cnt++;
+      if (cache->get(cache,req) == false) {
+        miss_cnt++;
       }
     }
 
-    req_cnt++;
-    req_byte += req->obj_size;
-    if (cache->get(cache, req) == false) {
-      miss_cnt++;
-      miss_byte += req->obj_size;
-    }
-    if (req->clock_time - last_report_ts >= (uint64_t)report_interval &&
-        req->clock_time != 0) {
-      INFO(
-          "%s %s %.2lf hour: %lu requests, miss ratio %.4lf, interval miss "
-          "ratio "
-          "%.4lf\n",
-          mybasename(reader->trace_path), detailed_cache_name,
-          (double)req->clock_time / 3600, (unsigned long)req_cnt,
-          (double)miss_cnt / req_cnt,
-          (double)(miss_cnt - last_miss_cnt) / (req_cnt - last_req_cnt));
-      last_miss_cnt = miss_cnt;
-      last_req_cnt = req_cnt;
-      last_report_ts = (int64_t)req->clock_time;
-        }
-
-    read_one_req(reader, req);
+    // if (print_head_req) {
+    //   print_head_requests(req, req_cnt);
+    // }
+    //
+    // req->clock_time -= start_ts;
+    // if (req->clock_time <= warmup_sec) {
+    //   cache->get(cache, req);
+    //   read_one_req(reader, req);
+    //   continue;
+    // } else {
+    //   if (start_time < 0) {
+    //     start_time = gettime();
+    //   }
+    // }
+    //
+    // req_cnt++;
+    // req_byte += req->obj_size;
+    // if (cache->get(cache, req) == false) {
+    //   miss_cnt++;
+    //   miss_byte += req->obj_size;
+    // }
+    // if (req->clock_time - last_report_ts >= (uint64_t)report_interval &&
+    //     req->clock_time != 0) {
+    //   INFO(
+    //       "%s %s %.2lf hour: %lu requests, miss ratio %.4lf, interval miss "
+    //       "ratio "
+    //       "%.4lf\n",
+    //       mybasename(reader->trace_path), detailed_cache_name,
+    //       (double)req->clock_time / 3600, (unsigned long)req_cnt,
+    //       (double)miss_cnt / req_cnt,
+    //       (double)(miss_cnt - last_miss_cnt) / (req_cnt - last_req_cnt));
+    //   last_miss_cnt = miss_cnt;
+    //   last_req_cnt = req_cnt;
+    //   last_report_ts = (int64_t)req->clock_time;
+    //     }
+    //
+    // read_one_req(reader, req);
   }
 
   double runtime = gettime() - start_time;

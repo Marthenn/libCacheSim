@@ -46,6 +46,8 @@ enum argp_option_short {
   OPTION_PREFETCH_ALGO = 'p',
   OPTION_PREFETCH_PARAMS = 0x109,
   OPTION_PRINT_HEAD_REQ = 0x10a,
+
+  OPTION_EPOCH_SIZE = 0x200,
 };
 
 /*
@@ -94,6 +96,9 @@ static struct argp_option options[] = {
     {"verbose", OPTION_VERBOSE, "1", 0, "Produce verbose output", 10},
     {"print-head-req", OPTION_PRINT_HEAD_REQ, "false", 0,
      "Print the first few requests", 10},
+
+    {"epoch-size", OPTION_EPOCH_SIZE, "100000", 0,
+     "Epoch size for Beam Search of S3-FIFO based algorithms", 10},
 
     {0, 0, 0, 0, 0, 0}};
 
@@ -183,6 +188,9 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         argp_usage(state);
         exit(1);
       }
+      break;
+    case OPTION_EPOCH_SIZE:
+      arguments->epoch_size = atoi(arg);
       break;
     default:
       return ARGP_ERR_UNKNOWN;

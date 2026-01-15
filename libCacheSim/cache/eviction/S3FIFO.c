@@ -37,6 +37,13 @@ extern "C" {
 #endif
 
 typedef struct {
+  int64_t interval_reqs;        // number of requests since last snapshot
+  int64_t interval_hits_small;
+  int64_t interval_hits_main;
+  int64_t interval_hits_ghost;
+} epoch_stats_t;
+
+typedef struct {
   cache_t *small_fifo;
   cache_t *ghost_fifo;
   cache_t *main_fifo;
@@ -48,6 +55,8 @@ typedef struct {
 
   bool has_evicted;
   request_t *req_local;
+
+  epoch_stats_t stats;
 } S3FIFO_params_t;
 
 static const char *DEFAULT_CACHE_PARAMS =
@@ -75,6 +84,10 @@ static void S3FIFO_parse_params(cache_t *cache,
 
 static void S3FIFO_evict_small(cache_t *cache, const request_t *req);
 static void S3FIFO_evict_main(cache_t *cache, const request_t *req);
+
+void S3FIFO_print_training_row(cache_t *cache, double optimal_param);
+void S3FIFO_resize(cache_t *cache, double new_small_ratio);
+
 
 // ***********************************************************************
 // ****                                                               ****
@@ -105,6 +118,8 @@ cache_t *S3FIFO_init(const common_cache_params_t ccache_params,
   S3FIFO_params_t *params = (S3FIFO_params_t *)cache->eviction_params;
   params->req_local = new_request();
   params->hit_on_ghost = false;
+
+  memset(&params->stats, 0, sizeof(epoch_stats_t)); // initialize epoch stats with zeros
 
   S3FIFO_parse_params(cache, DEFAULT_CACHE_PARAMS);
   if (cache_specific_params != NULL) {
@@ -178,6 +193,9 @@ static void S3FIFO_free(cache_t *cache) {
  */
 static bool S3FIFO_get(cache_t *cache, const request_t *req) {
   S3FIFO_params_t *params = (S3FIFO_params_t *)cache->eviction_params;
+
+  params->stats.interval_reqs++;
+
   DEBUG_ASSERT(params->small_fifo->get_occupied_byte(params->small_fifo) +
                    params->main_fifo->get_occupied_byte(params->main_fifo) <=
                cache->cache_size);
@@ -224,6 +242,7 @@ static cache_obj_t *S3FIFO_find(cache_t *cache, const request_t *req,
   cache_obj_t *obj = params->small_fifo->find(params->small_fifo, req, true);
   if (obj != NULL) {
     obj->S3FIFO.freq += 1;
+    params->stats.interval_hits_small++;
     return obj;
   }
 
@@ -231,11 +250,13 @@ static cache_obj_t *S3FIFO_find(cache_t *cache, const request_t *req,
       params->ghost_fifo->remove(params->ghost_fifo, req->obj_id)) {
     // if object in ghost_fifo, remove will return true
     params->hit_on_ghost = true;
+    params->stats.interval_hits_ghost++;
   }
 
   obj = params->main_fifo->find(params->main_fifo, req, true);
   if (obj != NULL) {
     obj->S3FIFO.freq += 1;
+    params->stats.interval_hits_main++;
   }
 
   return obj;
@@ -475,6 +496,66 @@ static void S3FIFO_parse_params(cache_t *cache,
   }
 
   free(old_params_str);
+}
+
+void S3FIFO_print_training_row(cache_t *cache, double optimal_param) {
+  S3FIFO_params_t *params = (S3FIFO_params_t *)cache->eviction_params;
+
+  double total = (double)params->stats.interval_reqs;
+  if (total == 0) {
+    return;
+  }
+
+  double hit_s = (double)params->stats.interval_hits_small / total;
+  double hit_m = (double)params->stats.interval_hits_main / total;
+  double hit_g = (double)params->stats.interval_hits_ghost / total;
+  double curr_ratio = params->small_size_ratio;
+
+  // 2. Open File (Append Mode)
+  FILE *fp = fopen("/mnt/mfs/training_data.csv", "a");
+  if (fp != NULL) {
+    // CSV Format:
+    // Current_S_Ratio, Hit_Small, Hit_Main, Hit_Ghost, LABEL_Optimal_S_Ratio
+    fprintf(fp, "%.4lf,%.4lf,%.4lf,%.4lf,%.4lf\n",
+            curr_ratio, hit_s, hit_m, hit_g, optimal_param);
+    fclose(fp);
+  } else {
+    perror("Failed to open training_data.csv");
+  }
+
+  // 3. CRITICAL: Reset Stats for the next epoch
+  // We are about to resize and run the next batch, so start fresh.
+  memset(&params->stats, 0, sizeof(epoch_stats_t));
+}
+
+/**
+ * @brief Resizes the S3 queues dynamically.
+ * @param cache The S3FIFO cache object
+ * @param new_small_ratio The new ratio (0.01 to 0.99)
+ */
+void S3FIFO_resize(cache_t *cache, double new_small_ratio) {
+  S3FIFO_params_t *params = (S3FIFO_params_t *)cache->eviction_params;
+
+  // Safety checks
+  if (new_small_ratio < 0.01) new_small_ratio = 0.01;
+  if (new_small_ratio > 0.99) new_small_ratio = 0.99;
+
+  params->small_size_ratio = new_small_ratio;
+
+  // Recalculate sizes
+  int64_t total_size = cache->cache_size;
+  int64_t new_small_size = (int64_t)(total_size * params->small_size_ratio);
+  int64_t new_main_size = total_size - new_small_size;
+
+  // Apply new limits
+  params->small_fifo->cache_size = new_small_size;
+  params->main_fifo->cache_size = new_main_size;
+
+  // NOTE: We do not force eviction here.
+  // The next time S3FIFO_evict is called:
+  // 1. If we SHRUNK Small: Small is now overfull, so it will evict.
+  // 2. If we SHRUNK Main: Main is now overfull, so it will evict.
+  // This lazy resizing is efficient.
 }
 
 #ifdef __cplusplus

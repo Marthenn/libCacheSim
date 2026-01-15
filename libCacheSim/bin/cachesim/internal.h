@@ -48,6 +48,8 @@ struct arguments {
   bool use_ttl;
   bool print_head_req;
 
+  int epoch_size;
+
   /* arguments generated */
   reader_t *reader;
   cache_t *caches[N_MAX_ALGO * N_MAX_CACHE_SIZE];
@@ -59,7 +61,7 @@ void free_arg(struct arguments *args);
 
 void simulate(reader_t *reader, cache_t *cache, int report_interval,
               int warmup_sec, char *ofilepath, bool ignore_obj_size,
-              bool print_head_req);
+              bool print_head_req, int epoch_size);
 
 void print_parsed_args(struct arguments *args);
 
