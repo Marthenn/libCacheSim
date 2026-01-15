@@ -7,6 +7,8 @@
 #include "utils/include/mystr.h"
 #include "utils/include/mysys.h"
 
+#include "cache/eviction/S3FIFO.c"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -52,23 +54,37 @@ double run_oracle_on_buffer(request_t *req_buffer, int count, cache_t *cache) {
     }
   }
 
-  double best_miss = 2.0;
-  double best_param = -1.0;
+  double current_param = ((S3FIFO_params_t*)cache->eviction_params)->small_size_ratio;
+  double current_miss_rate = 1.0;
+  double best_miss_rate = 1.0;
+  double best_param = current_param;
 
   for (int i = 0; i < num_candidates; i++) {
     close(pipes[i][1]);
 
     double child_miss;
     if (read(pipes[i][0], &child_miss, sizeof(double)) > 0) {
-      if (child_miss < best_miss) {
-        best_miss = child_miss;
+      if (fabs(candidates[i] - current_param) < 0.01) {
+        current_miss_rate = child_miss;
+      }
+
+      if (child_miss < best_miss_rate) {
+        best_miss_rate = child_miss;
         best_param = candidates[i];
       }
     }
     wait(NULL); // Wait for child process to finish
   }
 
-  return (best_param == -1.0) ? 0.1 : best_param;
+  double improvement = (current_miss_rate - best_miss_rate) / current_miss_rate;
+
+  // If the improvement is less than 3% (0.03), REJECT the change.
+  // This forces the cache to be stable and protects the Main Queue.
+  if (improvement < 0.03) {
+    return current_param;
+  }
+
+  return best_param;
 }
 
 void print_head_requests(request_t *req, uint64_t req_cnt) {
