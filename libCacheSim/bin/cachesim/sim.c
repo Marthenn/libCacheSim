@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+char* csv_dir = "/mnt/mfs/results.csv";
+
 void print_head_requests(request_t *req, uint64_t req_cnt) {
   if (req_cnt < 2) {
     print_request(req);
@@ -115,6 +117,34 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
   }
   fprintf(output_file, "%s", output_str);
   fclose(output_file);
+
+  FILE *csv_file = fopen(csv_dir, "a");
+  if (csv_file == NULL) {
+    ERROR("cannot open file %s %s\n", csv_dir, strerror(errno));
+  }
+  // Trace, Ignore Obj Size, Cache, Size,  Miss Ratio, Byte Miss Ratio, Throughput(QPS)
+  if (!ignore_obj_size) {
+    fprintf(csv_file,
+            "%s,%s,%s,%lld,%.6lf,%.6lf,%.2lf\n",
+            mybasename(reader->trace_path),
+            "N",
+            detailed_cache_name,
+            (long long)cache->cache_size,
+            (double)miss_cnt / (double)req_cnt,
+            (double)miss_byte / (double)req_byte,
+            (double)req_cnt / runtime);
+  } else {
+    fprintf(csv_file,
+            "%s,%s,%s,%lld,%.6lf,%.6lf,%.2lf\n",
+            mybasename(reader->trace_path),
+            "Y",
+            detailed_cache_name,
+            (long long)cache->cache_size,
+            (double)miss_cnt / (double)req_cnt,
+            (double)miss_byte / (double)req_byte,
+            (double)req_cnt / runtime);
+  }
+  fclose(csv_file);
 
 #if defined(TRACK_EVICTION_V_AGE)
   while (cache->get_occupied_byte(cache) > 0) {
