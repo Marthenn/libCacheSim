@@ -60,3 +60,17 @@ set_target_properties(traceFilter
         )
 
 install(TARGETS traceFilter RUNTIME DESTINATION bin)
+
+set(traceCSV_sources_cpp
+    traceCSV.cpp
+    cli_parser.cpp
+)
+add_executable(traceCSV ${traceCSV_sources_cpp})
+target_include_directories(traceCSV PRIVATE ${libCacheSim_include_dir} ${GLib_INCLUDE_DIRS})
+target_link_libraries(traceCSV ${PROJECT_NAME} cliReaderLib)
+set_target_properties(traceCSV
+        PROPERTIES
+        CXX_STANDARD 17
+        CXX_STANDARD_REQUIRED YES
+        CXX_EXTENSIONS NO
+        )
