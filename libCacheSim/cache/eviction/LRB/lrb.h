@@ -7,6 +7,7 @@
 
 #include <LightGBM/c_api.h>
 #include <assert.h>
+#include <stdbool.h>
 
 #include <cmath>
 #include <fstream>
@@ -270,6 +271,8 @@ struct KeyMapEntryT {
 
 class LRBCache : public Cache {
  public:
+  ~LRBCache();
+
   uint32_t current_seq = -1;
   vector<uint32_t> edc_windows;
   vector<double> hash_edc;
@@ -329,6 +332,13 @@ class LRBCache : public Cache {
 
   uint64_t byte_million_req;
 
+  bool output_training_data = false;
+  std::string training_data_path;
+  std::ofstream training_file;
+
+  bool use_pretrained_model = false;
+  std::string model_path;
+
   void init_with_params(const map<string, string> &params) override {
     // set params
     for (auto &it : params) {
@@ -361,6 +371,13 @@ class LRBCache : public Cache {
           cerr << "error: unknown objective" << endl;
           exit(-1);
         }
+      } else if (it.first == "training_data_path") {
+        output_training_data = true;
+        training_data_path = it.second;
+        training_file.open(training_data_path);
+      } else if (it.first == "model_path") {
+        use_pretrained_model = true;
+        model_path = it.second;
       } else {
         cerr << "LRB unrecognized parameter: " << it.first << endl;
       }
@@ -394,6 +411,17 @@ class LRBCache : public Cache {
     }
     inference_params = training_params;
     training_data = new TrainingData(n_feature, memory_window);
+
+    if (use_pretrained_model) {
+      int num_iteration;
+      int result = LGBM_BoosterCreateFromModelfile(
+        model_path.c_str(), &num_iteration, &booster
+      );
+      if (result != 0) {
+        cerr << "error: cannot load model from " << model_path << endl;
+        abort();
+      }
+    }
   }
 
   string map_to_string(unordered_map<string, string> &map) {

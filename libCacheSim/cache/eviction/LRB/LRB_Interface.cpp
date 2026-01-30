@@ -19,6 +19,9 @@ extern "C" {
 typedef struct {
   void *LRB_cache;
   char *objective;
+  char *training_data_path;
+  char *model_path;
+
   SimpleRequest lrb_req;
 
   pair<uint64_t, uint32_t> to_evict_pair;
@@ -97,6 +100,9 @@ cache_t *LRB_init(const common_cache_params_t ccache_params,
 
   params->objective = nullptr;
 
+  params->training_data_path = nullptr;
+  params->model_path = nullptr;
+
   LRB_parse_params(cache, DEFAULT_PARAMS);
   if (cache_specific_params != NULL) {
     LRB_parse_params(cache, cache_specific_params);
@@ -117,6 +123,13 @@ cache_t *LRB_init(const common_cache_params_t ccache_params,
     snprintf(cache->cache_name, CACHE_NAME_ARRAY_LEN, "%s", "LRB-BMR");
   } else {
     ERROR("LRB does not support objective %s\n", params->objective);
+  }
+
+  if (params->training_data_path) {
+    params_map["training_data_path"] = params->training_data_path;
+  }
+  if (params->model_path) {
+    params_map["model_path"] = params->model_path;
   }
 
   lrb->init_with_params(params_map);
@@ -309,11 +322,20 @@ static int64_t LRB_get_occupied_byte(const cache_t *cache) {
 // ****                  parameter set up functions                   ****
 // ****                                                               ****
 // ***********************************************************************
-static const char *LRB_current_params(cache_t *cache, LRB_params_t *params) {
-  static __thread char params_str[128];
-  int n = snprintf(params_str, 128, "objective=%s", params->objective);
+  static const char *LRB_current_params(cache_t *cache, LRB_params_t *params) {
+  // Increased buffer from 128 to 1024 to fit long paths
+  static __thread char params_str[1024];
+  int n = snprintf(params_str, 1024, "objective=%s", params->objective);
 
-  snprintf(params_str + n, 128 - n, "\n");
+  // NEW: Debug the ingested paths
+  if (params->training_data_path != NULL) {
+    n += snprintf(params_str + n, 1024 - n, ", training_data_path=%s", params->training_data_path);
+  }
+  if (params->model_path != NULL) {
+    n += snprintf(params_str + n, 1024 - n, ", model_path=%s", params->model_path);
+  }
+
+  snprintf(params_str + n, 1024 - n, "\n");
 
   return params_str;
 }
@@ -354,7 +376,17 @@ static void LRB_parse_params(cache_t *cache,
       printf("current parameters: %s\n", LRB_current_params(cache, params));
       free(original_params_str);
       exit(0);
-    } else {
+    } else if (strcasecmp(key, "training_data_path") == 0) {
+      if (params->model_path != NULL) {
+        free(params->training_data_path);
+      }
+      params->training_data_path = strdup(value);
+    } else if (strcasecmp(key, "model_path") == 0) {
+      if (params->model_path != NULL) {
+        free(params->model_path);
+      }
+      params->model_path = strdup(value);
+    }else {
       ERROR("%s does not have parameter %s\n", cache->cache_name, key);
       free(original_params_str);
       exit(1);

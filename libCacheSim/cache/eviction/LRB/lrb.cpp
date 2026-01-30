@@ -14,6 +14,26 @@ using namespace std;
 using namespace lrb;
 
 void LRBCache::train() {
+  if (use_pretrained_model) {
+    training_data->clear();
+    return;
+  }
+
+  if (output_training_data) {
+    for (size_t i = 0; i < training_data->labels.size(); ++i) {
+      training_file << training_data->labels[i];
+      size_t start = training_data->indptr[i];
+      size_t end = training_data->indptr[i + 1];
+      for (size_t j = start; j < end; ++j) {
+        training_file << " " << training_data->indices[j] << ":"
+                      << training_data->data[j];
+      }
+      training_file << "\n";
+    }
+    training_data->clear();
+    return;
+  }
+
   ++n_retrain;
   auto timeBegin = chrono::system_clock::now();
   if (booster) LGBM_BoosterFree(booster);
@@ -493,4 +513,14 @@ void LRBCache::remove_from_outcache_metas(Meta &meta, unsigned int &pos,
   out_cache_metas.pop_back();
   key_map.erase(key);
   negative_candidate_queue->erase(current_seq % memory_window);
+}
+
+LRBCache::~LRBCache() {
+  if (output_training_data && training_file.is_open()) {
+    training_file.close();
+  }
+  if (booster) {
+    LGBM_BoosterFree(booster);
+  }
+  delete training_data;
 }
