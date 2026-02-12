@@ -19,6 +19,7 @@ extern "C" {
 typedef struct {
   void *LRB_cache;
   char *objective;
+  int batch_size;
   SimpleRequest lrb_req;
 
   pair<uint64_t, uint32_t> to_evict_pair;
@@ -96,6 +97,7 @@ cache_t *LRB_init(const common_cache_params_t ccache_params,
   cache->eviction_params = params;
 
   params->objective = nullptr;
+  params->batch_size = 131072;
 
   LRB_parse_params(cache, DEFAULT_PARAMS);
   if (cache_specific_params != NULL) {
@@ -110,7 +112,9 @@ cache_t *LRB_init(const common_cache_params_t ccache_params,
   std::map<string, string> params_map;
 
   params_map["objective"] = params->objective;
+  params_map["batch_size"] = to_string(params->batch_size);
 
+  /*
   if (strcmp(params->objective, "object-miss-ratio") == 0) {
     snprintf(cache->cache_name, CACHE_NAME_ARRAY_LEN, "%s", "LRB-OMR");
   } else if (strcasecmp(params->objective, "byte-miss-ratio") == 0) {
@@ -118,6 +122,10 @@ cache_t *LRB_init(const common_cache_params_t ccache_params,
   } else {
     ERROR("LRB does not support objective %s\n", params->objective);
   }
+  */
+
+  const char* obj_str = (strcmp(params->objective, "object-miss-ratio") == 0) ? "LRB-OMR" : "LRB-BMR";
+  snprintf(cache->cache_name, CACHE_NAME_ARRAY_LEN, "%s-%d", obj_str, params->batch_size);
 
   lrb->init_with_params(params_map);
 
@@ -311,10 +319,8 @@ static int64_t LRB_get_occupied_byte(const cache_t *cache) {
 // ***********************************************************************
 static const char *LRB_current_params(cache_t *cache, LRB_params_t *params) {
   static __thread char params_str[128];
-  int n = snprintf(params_str, 128, "objective=%s", params->objective);
-
+  int n = snprintf(params_str, 128, "objective=%s,batch_size=%d", params->objective, params->batch_size);
   snprintf(params_str + n, 128 - n, "\n");
-
   return params_str;
 }
 
@@ -354,6 +360,8 @@ static void LRB_parse_params(cache_t *cache,
       printf("current parameters: %s\n", LRB_current_params(cache, params));
       free(original_params_str);
       exit(0);
+    } else if (strcasecmp(key, "batch_size") == 0) {
+      params->batch_size = atoi(value);
     } else {
       ERROR("%s does not have parameter %s\n", cache->cache_name, key);
       free(original_params_str);

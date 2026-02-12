@@ -32,7 +32,7 @@ static const uint32_t n_extra_fields = 0;
 static const uint8_t max_n_past_timestamps = 32;
 static const uint8_t max_n_past_distances = 31;
 static const uint8_t base_edc_window = 10;
-static const uint32_t batch_size = 131072;
+// static const uint32_t batch_size = 131072;
 
 struct MetaExtra {
   // vector overhead = 24 (8 pointer, 8 size, 8 allocation)
@@ -176,14 +176,16 @@ class TrainingData {
   vector<int32_t> indices;
   vector<double> data;
   uint32_t memory_window;
+  uint32_t batch_size;
 
-  TrainingData(uint32_t n_feature, uint32_t memory_window_) {
+  TrainingData(uint32_t n_feature, uint32_t memory_window_, uint32_t batch_size_) {
     labels.reserve(batch_size);
     indptr.reserve(batch_size + 1);
     indptr.emplace_back(0);
     indices.reserve(batch_size * n_feature);
     data.reserve(batch_size * n_feature);
     memory_window = memory_window_;
+    batch_size = batch_size_;
   }
 
   void emplace_back(Meta &meta, uint32_t &sample_timestamp,
@@ -276,6 +278,7 @@ class LRBCache : public Cache {
   uint32_t max_hash_edc_idx;
   uint32_t memory_window = 67108864;
   uint32_t n_feature;
+  uint32_t batch_size = 131072;
 
   // key -> (0/1 list, idx)
   sparse_hash_map<uint64_t, KeyMapEntryT> key_map;
@@ -361,6 +364,8 @@ class LRBCache : public Cache {
           cerr << "error: unknown objective" << endl;
           exit(-1);
         }
+      } else if (it.first == "batch_size") {
+        batch_size = stoul(it.second);
       } else {
         cerr << "LRB unrecognized parameter: " << it.first << endl;
       }
@@ -393,7 +398,7 @@ class LRBCache : public Cache {
       training_params["categorical_feature"] = categorical_feature;
     }
     inference_params = training_params;
-    training_data = new TrainingData(n_feature, memory_window);
+    training_data = new TrainingData(n_feature, memory_window, batch_size);
   }
 
   string map_to_string(unordered_map<string, string> &map) {
