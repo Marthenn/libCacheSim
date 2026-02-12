@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+const char *csv_path = "/mnt/mfs/results.csv";
+
 void print_head_requests(request_t *req, uint64_t req_cnt) {
   if (req_cnt < 2) {
     print_request(req);
@@ -115,6 +117,25 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
   }
   fprintf(output_file, "%s", output_str);
   fclose(output_file);
+
+  FILE *csv_file = fopen(csv_path, "a");
+  if (csv_file != NULL) {
+    // Check if file is empty to write header
+    fseek(csv_file, 0, SEEK_END);
+    if (ftell(csv_file) == 0) {
+      fprintf(csv_file, "trace,cache,size,reqs,miss_ratio\n");
+    }
+
+    fprintf(csv_file, "%s,%s,%lld,%lu,%lf\n",
+            reader->trace_path,
+            detailed_cache_name,
+            (long long)cache->cache_size,
+            (unsigned long)req_cnt,
+            (double)miss_cnt / (double)req_cnt);
+    fclose(csv_file);
+  } else {
+    ERROR("cannot open csv file %s %s\n", output_dir, strerror(errno));
+  }
 
 #if defined(TRACK_EVICTION_V_AGE)
   while (cache->get_occupied_byte(cache) > 0) {
