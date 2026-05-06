@@ -36,6 +36,8 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
 
   double start_time = -1;
   while (req->valid) {
+    req->obj_id /= 200;
+
     if (print_head_req) {
       print_head_requests(req, req_cnt);
     }
