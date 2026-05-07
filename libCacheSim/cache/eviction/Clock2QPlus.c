@@ -42,6 +42,8 @@ typedef struct {
   char main_cache_type[32];
 
   request_t *req_local;
+
+  int max_skipped_blocks;
 } Clock2QPlus_params_t;
 
 static const char *Clock2QPlus_DEFAULT_CACHE_PARAMS =
@@ -362,33 +364,74 @@ static void Clock2QPlus_evict_main(cache_t *cache, const request_t *req) {
   Clock2QPlus_params_t *params = (Clock2QPlus_params_t *)cache->eviction_params;
   cache_t *main = params->main_cache;
 
-  // evict from main cache
   bool has_evicted = false;
+  int skipped_count = 0; // TRACK SKIPPED BLOCKS
+
   while (!has_evicted && main->get_occupied_byte(main) > 0) {
     cache_obj_t *obj_to_evict = main->to_evict(main, req);
     DEBUG_ASSERT(obj_to_evict != NULL);
     int freq = obj_to_evict->Clock2QPlus.freq;
+
+    // FORCE EVICTION IF THRESHOLD REACHED
+    if (skipped_count >= params->max_skipped_blocks) {
+      freq = 0;
+    }
+
     copy_cache_obj_to_request(params->req_local, obj_to_evict);
+
     if (freq >= 1) {
-      // we need to evict first because the object to insert has the same obj_id
       main->remove(main, obj_to_evict->obj_id);
       obj_to_evict = NULL;
 
       cache_obj_t *new_obj = main->insert(main, params->req_local);
-      // 1-bit counter
       new_obj->Clock2QPlus.freq = 0;
       new_obj->freq = freq;
+
+      skipped_count++; // INCREMENT COUNTER
     } else {
       obj_id_t obj_id = obj_to_evict->obj_id;
       bool removed = main->remove(main, obj_id);
       if (!removed) {
         ERROR("cannot remove obj %" PRIu64 "\n", obj_id);
       }
-
       has_evicted = true;
     }
   }
 }
+
+// static void Clock2QPlus_evict_main(cache_t *cache, const request_t *req) {
+//   Clock2QPlus_params_t *params = (Clock2QPlus_params_t *)cache->eviction_params;
+//   cache_t *main = params->main_cache;
+//
+//   // evict from main cache
+//   bool has_evicted = false;
+//   int skipped_count = 0;
+//
+//   while (!has_evicted && main->get_occupied_byte(main) > 0) {
+//     cache_obj_t *obj_to_evict = main->to_evict(main, req);
+//     DEBUG_ASSERT(obj_to_evict != NULL);
+//     int freq = obj_to_evict->Clock2QPlus.freq;
+//     copy_cache_obj_to_request(params->req_local, obj_to_evict);
+//     if (freq >= 1) {
+//       // we need to evict first because the object to insert has the same obj_id
+//       main->remove(main, obj_to_evict->obj_id);
+//       obj_to_evict = NULL;
+//
+//       cache_obj_t *new_obj = main->insert(main, params->req_local);
+//       // 1-bit counter
+//       new_obj->Clock2QPlus.freq = 0;
+//       new_obj->freq = freq;
+//     } else {
+//       obj_id_t obj_id = obj_to_evict->obj_id;
+//       bool removed = main->remove(main, obj_id);
+//       if (!removed) {
+//         ERROR("cannot remove obj %" PRIu64 "\n", obj_id);
+//       }
+//
+//       has_evicted = true;
+//     }
+//   }
+// }
 
 /**
  * @brief evict an object from the cache
@@ -507,6 +550,8 @@ static void Clock2QPlus_parse_params(cache_t *cache,
     } else if (strcasecmp(key, "print") == 0) {
       printf("parameters: %s\n", Clock2QPlus_current_params(params));
       exit(0);
+    } else if (strcasecmp(key, "max-skipped-blocks") == 0) {
+      params->max_skipped_blocks = atoi(value);
     } else {
       ERROR("%s does not have parameter %s\n", cache->cache_name, key);
       exit(1);
