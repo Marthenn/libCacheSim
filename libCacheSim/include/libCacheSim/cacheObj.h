@@ -142,6 +142,7 @@ typedef struct {
 typedef struct {
   int64_t insertion_time;  // measured in number of objects inserted
   int64_t freq;
+  int64_t dirty_time; // 0 means clean, >0 means the timestamp it became dirty
 } Clock2QPlus_obj_metadata_t;
 
 typedef struct {

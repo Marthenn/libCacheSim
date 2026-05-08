@@ -8,6 +8,8 @@
 extern "C" {
 #endif
 
+extern double Clock2QPlus_get_mean_skipped(cache_t *cache);
+
 void print_head_requests(request_t *req, uint64_t req_cnt) {
   if (req_cnt < 2) {
     print_request(req);
@@ -107,6 +109,13 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
                   ", cost saving ratio %.4lf", cost_saving_ratio);
   snprintf(output_str + n, sizeof(output_str) - n, ", throughput %.2lf MQPS\n",
            (double)req_cnt / 1000000.0 / runtime);
+
+  if (strstr(cache->cache_name, "Clock2QPlus") != NULL) {
+    double mean_skipped = Clock2QPlus_get_mean_skipped(cache);
+    n += snprintf(output_str + n, sizeof(output_str) - n, ", mean skipped %.4lf", mean_skipped);
+  }
+  snprintf(output_str + n, sizeof(output_str) - n, "\n");
+
   printf("%s", output_str);
   char *output_dir = rindex(ofilepath, '/');
   if (output_dir != NULL) {

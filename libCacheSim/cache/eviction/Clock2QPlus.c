@@ -43,12 +43,22 @@ typedef struct {
 
   request_t *req_local;
 
+  // Ablation parameters
+  bool simplify_dirty_handling;
+  double simulated_write_ratio; // e.g., 0.20 for 20% writes
+  int64_t simulated_flush_interval; // e.g., 30 (seconds)
+
+  int64_t total_skipped_blocks;
+  int64_t total_evict_main_calls;
+
   int max_skipped_blocks;
 } Clock2QPlus_params_t;
 
 static const char *Clock2QPlus_DEFAULT_CACHE_PARAMS =
     "fifo-size-ratio=0.10,ghost-size-ratio=0.90,move-to-main-threshold=1,"
-    "corr-window-ratio=0.5";
+    "corr-window-ratio=0.5,simplify-dirty-handling=0,simulated-write-ratio=0.20,"
+    "simulated-flush-interval=30,max-skipped-blocks=2147483647";
+// 2147483647 is INT_MAX (effectively infinity)
 
 // ***********************************************************************
 // ****                                                               ****
@@ -135,6 +145,9 @@ cache_t *Clock2QPlus_init(const common_cache_params_t ccache_params,
 
   ccache_params_local.cache_size = main_cache_size;
   params->main_cache = FIFO_init(ccache_params_local, NULL);
+
+  params->total_evict_main_calls = 0;
+  params->total_skipped_blocks = 0;
 
 #if defined(TRACK_EVICTION_V_AGE)
   if (params->fifo_ghost != NULL) {
@@ -250,6 +263,13 @@ static cache_obj_t *Clock2QPlus_find(cache_t *cache, const request_t *req,
 
   obj = params->main_cache->find(params->main_cache, req, true);
   if (obj != NULL) {
+    if (update_cache) {
+      // SYNTHETIC WRITE ON HIT: Update the dirty time
+      if ((req->obj_id % 100) < (params->simulated_write_ratio * 100)) {
+        obj->Clock2QPlus.dirty_time = req->clock_time;
+      }
+    }
+
     obj->Clock2QPlus.freq += 1;
   }
 
@@ -307,7 +327,21 @@ static cache_obj_t *Clock2QPlus_insert(cache_t *cache, const request_t *req) {
 
   obj->Clock2QPlus.freq = 0;
 
+  // SYNTHETIC WRITE: Tag with the actual clock time
+  if ((req->obj_id % 100) < (params->simulated_write_ratio * 100)) {
+    obj->Clock2QPlus.dirty_time = req->clock_time;
+  } else {
+    obj->Clock2QPlus.dirty_time = 0; // Clean
+  }
+
   return obj;
+}
+
+// Add this to the bottom of Clock2QPlus.c
+double Clock2QPlus_get_mean_skipped(cache_t *cache) {
+  Clock2QPlus_params_t *params = (Clock2QPlus_params_t *)cache->eviction_params;
+  if (params->total_evict_main_calls == 0) return 0.0;
+  return (double)params->total_skipped_blocks / (double)params->total_evict_main_calls;
 }
 
 /**
@@ -332,33 +366,107 @@ static void Clock2QPlus_evict_fifo(cache_t *cache, const request_t *req) {
   cache_t *main = params->main_cache;
 
   bool has_evicted = false;
+  int dirty_skip_count = 0;
+
   while (!has_evicted && fifo->get_occupied_byte(fifo) > 0) {
-    // evict from FIFO
     cache_obj_t *obj_to_evict = fifo->to_evict(fifo, req);
     DEBUG_ASSERT(obj_to_evict != NULL);
-    // need to copy the object before it is evicted
+
+    // ==========================================
+    // CHECK ACTUAL TIME-BASED FLUSH
+    // ==========================================
+    bool is_dirty = false;
+    if (obj_to_evict->Clock2QPlus.dirty_time > 0) {
+        // If the current request time minus the dirty time is less than 30 seconds
+        if ((req->clock_time - obj_to_evict->Clock2QPlus.dirty_time) < params->simulated_flush_interval) {
+            is_dirty = true;
+        } else {
+            // 30 seconds have passed! It has flushed to disk in the background.
+            obj_to_evict->Clock2QPlus.dirty_time = 0;
+        }
+    }
+
     copy_cache_obj_to_request(params->req_local, obj_to_evict);
 
+    // ==========================================
+    // ABLATION: SIMPLIFIED DIRTY HANDLING
+    // ==========================================
+    if (is_dirty && params->simplify_dirty_handling) {
+         // Production Behavior: Skip dirty blocks
+         fifo->remove(fifo, params->req_local->obj_id);
+
+         cache_obj_t *reinserted = fifo->insert(fifo, params->req_local);
+         reinserted->Clock2QPlus.freq = obj_to_evict->Clock2QPlus.freq;
+         reinserted->Clock2QPlus.dirty_time = obj_to_evict->Clock2QPlus.dirty_time;
+
+         dirty_skip_count++;
+
+         if (dirty_skip_count >= 10) {
+             Clock2QPlus_evict_main(cache, req);
+             return;
+         }
+         continue;
+    }
+
+    // ==========================================
+    // IDEAL BEHAVIOR
+    // ==========================================
     if (obj_to_evict->Clock2QPlus.freq >= params->move_to_main_threshold) {
-      // freq is updated in cache_find_base
       params->n_obj_move_to_main += 1;
       params->n_byte_move_to_main += obj_to_evict->obj_size;
 
       cache_obj_t *new_obj = main->insert(main, params->req_local);
       new_obj->freq = obj_to_evict->freq;
+      new_obj->Clock2QPlus.dirty_time = obj_to_evict->Clock2QPlus.dirty_time;
+
     } else {
-      // insert to ghost
       if (ghost != NULL) {
         ghost->get(ghost, params->req_local);
       }
       has_evicted = true;
     }
 
-    // remove from fifo, but do not update stat
     bool removed = fifo->remove(fifo, params->req_local->obj_id);
     assert(removed);
   }
 }
+
+// static void Clock2QPlus_evict_fifo(cache_t *cache, const request_t *req) {
+//   Clock2QPlus_params_t *params = (Clock2QPlus_params_t *)cache->eviction_params;
+//   cache_t *fifo = params->fifo;
+//   cache_t *ghost = params->fifo_ghost;
+//   cache_t *main = params->main_cache;
+//
+//   bool has_evicted = false;
+//   int dirty_skip_count = 0;
+//
+//   while (!has_evicted && fifo->get_occupied_byte(fifo) > 0) {
+//     // evict from FIFO
+//     cache_obj_t *obj_to_evict = fifo->to_evict(fifo, req);
+//     DEBUG_ASSERT(obj_to_evict != NULL);
+//     // need to copy the object before it is evicted
+//     copy_cache_obj_to_request(params->req_local, obj_to_evict);
+//
+//     if (obj_to_evict->Clock2QPlus.freq >= params->move_to_main_threshold) {
+//       // freq is updated in cache_find_base
+//       params->n_obj_move_to_main += 1;
+//       params->n_byte_move_to_main += obj_to_evict->obj_size;
+//
+//       cache_obj_t *new_obj = main->insert(main, params->req_local);
+//       new_obj->freq = obj_to_evict->freq;
+//     } else {
+//       // insert to ghost
+//       if (ghost != NULL) {
+//         ghost->get(ghost, params->req_local);
+//       }
+//       has_evicted = true;
+//     }
+//
+//     // remove from fifo, but do not update stat
+//     bool removed = fifo->remove(fifo, params->req_local->obj_id);
+//     assert(removed);
+//   }
+// }
 
 static void Clock2QPlus_evict_main(cache_t *cache, const request_t *req) {
   Clock2QPlus_params_t *params = (Clock2QPlus_params_t *)cache->eviction_params;
@@ -397,6 +505,9 @@ static void Clock2QPlus_evict_main(cache_t *cache, const request_t *req) {
       has_evicted = true;
     }
   }
+
+  params->total_skipped_blocks += skipped_count;
+  params->total_evict_main_calls += 1;
 }
 
 // static void Clock2QPlus_evict_main(cache_t *cache, const request_t *req) {
@@ -506,12 +617,16 @@ static inline bool Clock2QPlus_can_insert(cache_t *cache,
 // ****                                                               ****
 // ***********************************************************************
 static const char *Clock2QPlus_current_params(Clock2QPlus_params_t *params) {
-  static __thread char params_str[128];
-  snprintf(params_str, 128,
+  static __thread char params_str[256]; // Increased buffer size to 256
+  snprintf(params_str, 256,
            "fifo-size-ratio=%.4lf,ghost-size-ratio=%.4lf,move-to-main-"
-           "threshold=%d,corr-window-ratio=%.4lf\n",
+           "threshold=%d,corr-window-ratio=%.4lf,"
+           "simplify-dirty-handling=%d,simulated-write-ratio=%.4lf,"
+           "simulated-flush-interval=%" PRId64 ",max-skipped-blocks=%d\n",
            params->fifo_size_ratio, params->ghost_size_ratio,
-           params->move_to_main_threshold, params->corr_window_ratio);
+           params->move_to_main_threshold, params->corr_window_ratio,
+           params->simplify_dirty_handling, params->simulated_write_ratio,
+           params->simulated_flush_interval, params->max_skipped_blocks);
   return params_str;
 }
 
@@ -550,6 +665,14 @@ static void Clock2QPlus_parse_params(cache_t *cache,
     } else if (strcasecmp(key, "print") == 0) {
       printf("parameters: %s\n", Clock2QPlus_current_params(params));
       exit(0);
+    } else if (strcasecmp(key, "max-skipped-blocks") == 0) {
+      params->max_skipped_blocks = atoi(value);
+    } else if (strcasecmp(key, "simplify-dirty-handling") == 0) {
+      params->simplify_dirty_handling = atoi(value) != 0; // converts 1/0 to true/false
+    } else if (strcasecmp(key, "simulated-write-ratio") == 0) {
+      params->simulated_write_ratio = strtod(value, NULL);
+    } else if (strcasecmp(key, "simulated-flush-interval") == 0) {
+      params->simulated_flush_interval = atoll(value);
     } else if (strcasecmp(key, "max-skipped-blocks") == 0) {
       params->max_skipped_blocks = atoi(value);
     } else {
