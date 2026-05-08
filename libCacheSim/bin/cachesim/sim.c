@@ -9,6 +9,7 @@ extern "C" {
 #endif
 
 extern double Clock2QPlus_get_mean_skipped(cache_t *cache);
+extern double S3FIFO_get_mean_skipped(cache_t *cache);
 
 void print_head_requests(request_t *req, uint64_t req_cnt) {
   if (req_cnt < 2) {
@@ -112,6 +113,9 @@ void simulate(reader_t *reader, cache_t *cache, int report_interval,
 
   if (strstr(cache->cache_name, "Clock2QPlus") != NULL) {
     double mean_skipped = Clock2QPlus_get_mean_skipped(cache);
+    n += snprintf(output_str + n, sizeof(output_str) - n, ", mean skipped %.4lf", mean_skipped);
+  } else if (strstr(cache->cache_name, "S3FIFO") != NULL) {
+    double mean_skipped = S3FIFO_get_mean_skipped(cache);
     n += snprintf(output_str + n, sizeof(output_str) - n, ", mean skipped %.4lf", mean_skipped);
   }
   snprintf(output_str + n, sizeof(output_str) - n, "\n");

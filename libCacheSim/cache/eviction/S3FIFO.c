@@ -48,6 +48,9 @@ typedef struct {
 
   bool has_evicted;
   request_t *req_local;
+
+  int64_t total_skipped_blocks;
+  int64_t total_evict_main_calls;
 } S3FIFO_params_t;
 
 static const char *DEFAULT_CACHE_PARAMS =
@@ -343,6 +346,8 @@ static void S3FIFO_evict_main(cache_t *cache, const request_t *req) {
   cache_t *main_fifo = params->main_fifo;
 
   bool has_evicted = false;
+  int skipped_count = 0; // Initialize here before the loop
+
   while (!has_evicted && main_fifo->get_occupied_byte(main_fifo) > 0) {
     cache_obj_t *obj_to_evict = main_fifo->to_evict(main_fifo, req);
     DEBUG_ASSERT(obj_to_evict != NULL);
@@ -357,6 +362,8 @@ static void S3FIFO_evict_main(cache_t *cache, const request_t *req) {
       // clock with 2-bit counter
       new_obj->S3FIFO.freq = MIN(freq, 3) - 1;
 
+      skipped_count++; // INCREMENT COUNTER
+
     } else {
       bool removed = main_fifo->remove(main_fifo, obj_to_evict->obj_id);
       DEBUG_ASSERT(removed);
@@ -364,7 +371,46 @@ static void S3FIFO_evict_main(cache_t *cache, const request_t *req) {
       has_evicted = true;
     }
   }
+
+  // TRACK FOR FIGURE 12B
+  params->total_skipped_blocks += skipped_count;
+  params->total_evict_main_calls += 1;
 }
+
+// Add this to the bottom of S3FIFO.c
+double S3FIFO_get_mean_skipped(cache_t *cache) {
+  S3FIFO_params_t *params = (S3FIFO_params_t *)cache->eviction_params;
+  if (params->total_evict_main_calls == 0) return 0.0;
+  return (double)params->total_skipped_blocks / (double)params->total_evict_main_calls;
+}
+
+// static void S3FIFO_evict_main(cache_t *cache, const request_t *req) {
+//   S3FIFO_params_t *params = (S3FIFO_params_t *)cache->eviction_params;
+//   cache_t *main_fifo = params->main_fifo;
+//
+//   bool has_evicted = false;
+//   while (!has_evicted && main_fifo->get_occupied_byte(main_fifo) > 0) {
+//     cache_obj_t *obj_to_evict = main_fifo->to_evict(main_fifo, req);
+//     DEBUG_ASSERT(obj_to_evict != NULL);
+//     int freq = obj_to_evict->S3FIFO.freq;
+//     copy_cache_obj_to_request(params->req_local, obj_to_evict);
+//     if (freq >= 1) {
+//       // we need to evict first because the object to insert has the same obj_id
+//       main_fifo->remove(main_fifo, obj_to_evict->obj_id);
+//       obj_to_evict = NULL;
+//
+//       cache_obj_t *new_obj = main_fifo->insert(main_fifo, params->req_local);
+//       // clock with 2-bit counter
+//       new_obj->S3FIFO.freq = MIN(freq, 3) - 1;
+//
+//     } else {
+//       bool removed = main_fifo->remove(main_fifo, obj_to_evict->obj_id);
+//       DEBUG_ASSERT(removed);
+//
+//       has_evicted = true;
+//     }
+//   }
+// }
 
 /**
  * @brief evict an object from the cache
